@@ -23,8 +23,8 @@ jobs:
         dotnet-version: '8.0.x'
     - name: Compilar y Publicar API
       run: |
-        dotnet restore Dsw2025Tpi
-        dotnet publish Dsw2025Tpi -c Release -o ./publish
+        dotnet restore Dsw2025Tpi.sln
+        dotnet publish Dsw2025Tpi.Api/Dsw2025Tpi.Api.csproj -c Release -o ./publish
     - name: Deploy to Azure App Service
       if: github.event_name != 'pull_request'
       uses: azure/webapps-deploy@v3
