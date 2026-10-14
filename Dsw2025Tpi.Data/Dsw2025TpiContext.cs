@@ -5,6 +5,9 @@ namespace Dsw2025Tpi.Data;
 
 public class Dsw2025TpiContext : DbContext
 {
+    public const string ProductSkuUniqueIndex = "UX_Products_Sku";
+    public const string ProductInternalCodeUniqueIndex = "UX_Products_InternalCode";
+
     public Dsw2025TpiContext(DbContextOptions<Dsw2025TpiContext> options)
         : base(options)
     {
@@ -59,6 +62,15 @@ public class Dsw2025TpiContext : DbContext
 
             eb.Property(p => p.StockQuantity)
             .IsRequired();
+
+            // Garantía definitiva de unicidad en SQL Server (complementa la validación de Application)
+            eb.HasIndex(p => p.Sku)
+            .IsUnique()
+            .HasDatabaseName(ProductSkuUniqueIndex);
+
+            eb.HasIndex(p => p.InternalCode)
+            .IsUnique()
+            .HasDatabaseName(ProductInternalCodeUniqueIndex);
 
         });
 
