@@ -111,14 +111,29 @@ public class Program
         })
         .AddEntityFrameworkStores<AuthenticateContext>()
         .AddDefaultTokenProviders()
-        .AddErrorDescriber<SpanishIdentityErrorDescriber>(); 
+        .AddErrorDescriber<SpanishIdentityErrorDescriber>();
 
 
-        var jwtConfig = builder.Configuration.GetSection("Jwt");
-        var keyText = jwtConfig["Key"] ?? throw new ArgumentNullException("JWT Key");
-        var key = Encoding.UTF8.GetBytes(keyText);
+		var jwtConfig = builder.Configuration.GetSection("Jwt");
+		var keyText = jwtConfig["Key"];
 
-        builder.Services.AddAuthentication(options =>
+		// No permitir el inicio de la API sin una clave configurada.
+		if (string.IsNullOrWhiteSpace(keyText))
+		{
+			throw new InvalidOperationException(
+				"Falta Jwt:Key. Configúrala con User Secrets en Development o con Jwt__Key en el entorno.");
+		}
+
+		// Exigir una longitud mínima apropiada para HS256.
+		if (Encoding.UTF8.GetByteCount(keyText) < 32)
+		{
+			throw new InvalidOperationException(
+				"Jwt:Key debe tener al menos 32 bytes para HMAC-SHA256.");
+		}
+
+		var key = Encoding.UTF8.GetBytes(keyText);
+
+		builder.Services.AddAuthentication(options =>
         {
             options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
             options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
