@@ -1,6 +1,6 @@
 # Dsw2025Tpi backend tests
 
-This project contains the shared automated tests for AT-B03. Unit tests are isolated from the API host, EF Core, Azure, and production data. Integration-test host and database setup belong to the B1–B4 workstream and must be documented when available.
+This project contains the shared automated tests for AT-B03. Unit tests are isolated from the API host, EF Core, Azure, and production data. B1–B4 integration tests use the real API host with isolated SQLite databases in memory.
 
 ## Prerequisites
 
@@ -18,7 +18,7 @@ dotnet test Dsw2025Tpi.Tests/Dsw2025Tpi.Tests.csproj --list-tests
 dotnet test Dsw2025Tpi.Tests/Dsw2025Tpi.Tests.csproj --filter Category=Unit
 ```
 
-A successful exit code is not sufficient if test discovery reports zero tests; inspect the discovered and executed test count. After B1–B4 add integration tests, run them using the isolated environment and cleanup steps documented by that workstream:
+A successful exit code is not sufficient if test discovery reports zero tests; inspect the discovered and executed test count. Run integration tests or the complete suite with:
 
 ```bash
 dotnet test Dsw2025Tpi.sln --filter Category=Integration
@@ -48,3 +48,16 @@ Agustín owns the shared project conventions and A1–A4 unit tests for product 
 EV-B03's acceptance criteria are confirmed: price must be greater than zero, and stock may be zero, for both add and update. The current `ProductsManagementService` on `development` behaves differently at those boundaries: it accepts price zero and rejects stock zero. To keep this A1–A4 PR test-only and passing, the four boundary tests currently characterize that existing behavior for add/update; they do not claim it meets the EV-B03 acceptance criteria. When EV-B03 changes the production service, update these four tests to the required behavior and rerun the suite. No production logic is changed in this PR.
 
 Package versions are explicit in `Dsw2025Tpi.Tests.csproj`; do not upgrade production dependencies as part of this test setup.
+
+## Integration tests (Axel, B1–B4)
+
+- `Integration/ApiFactory.cs` uses `WebApplicationFactory<Program>` and the `Testing` environment. The API skips startup migrations and JSON seeding in this environment. The factory replaces both EF providers with SQLite and creates the schemas using `EnsureCreated`.
+- Each test owns a host, two in-memory connections (business data and Identity), and its seed data. Disposing the factory closes the connections and deletes the databases. No SQL Server, Azure, credentials, environment variables, manual cleanup, or external service is required after package restore.
+- JWT configuration is test-only. Requests go through the real authentication and authorization middleware; authentication is not mocked. Registration and login also use the real Identity store.
+- `ApiAccessTests` covers public/protected endpoints, Admin/User/anonymous access, malformed/expired tokens and wrong signature/issuer/audience, registration/login, and HTTP validation/error responses.
+- `OrdersApiTests` covers creation, persisted item associations/totals/stock, invalid inputs, ownership for creation/read/list, Admin status updates, missing orders, and rollback after a later item fails or order persistence throws. The latter uses a test-only EF interceptor; persistence is verified in a fresh scope.
+- The ownership tests required enforcing the token's `customerId` in the order endpoints. Customers create and access their own orders; Admin can read orders and update status, but cannot create orders. Both existing customer role spellings (`User` and `USER`) are supported.
+- The rollback tests required a transaction around the complete order creation, including all stock writes and order insertion. Disposal rolls back an uncommitted transaction after an exception.
+- SQL Server migrations are intentionally not executed against SQLite: provider-specific migrations, collation, SQL Server error codes, and concurrent stock updates are not validated by this suite. Migration verification needs an isolated SQL Server environment; B4 makes that coverage conditional. The SQLite tests verify relational persistence and transactions, not SQL Server equivalence.
+
+Restore requires NuGet access. Once restored, `dotnet test Dsw2025Tpi.sln --no-restore` runs both suites without downloading packages. Use the `Category=Unit` / `Category=Integration` filters shown above to run either suite separately.
