@@ -59,6 +59,25 @@ public class ProductsManagementServiceTests
         repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AddProduct_WithZeroPrice_AddsProductAndReturnsZeroPrice()
+    {
+        var repository = CreateRepository();
+        Product? addedProduct = null;
+        repository.Setup(x => x.Add(It.IsAny<Product>()))
+            .Callback<Product>(product => addedProduct = product)
+            .Returns((Product product) => Task.FromResult(product));
+        var service = CreateService(repository);
+
+        var response = await service.AddProduct(ProductRequestFactory.Create(currentUnitPrice: 0m));
+
+        var savedProduct = Assert.IsType<Product>(addedProduct);
+        Assert.Equal(0m, savedProduct.CurrentUnitPrice);
+        Assert.Equal(0m, response.CurrentUnitPrice);
+        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Once());
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(-5)]
@@ -70,6 +89,19 @@ public class ProductsManagementServiceTests
 
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             service.AddProduct(ProductRequestFactory.Create(stockQuantity: stock)));
+
+        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AddProduct_WithZeroStock_ThrowsInvalidDataExceptionWithoutWriting()
+    {
+        var repository = CreateRepository();
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.AddProduct(ProductRequestFactory.Create(stockQuantity: 0)));
 
         repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
     }
@@ -212,6 +244,23 @@ public class ProductsManagementServiceTests
         repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithZeroPrice_UpdatesProductAndReturnsZeroPrice()
+    {
+        var product = CreateProduct();
+        var repository = CreateRepository(product);
+        var service = CreateService(repository);
+
+        var response = await service.UpdateProduct(
+            product.Id,
+            ProductRequestFactory.Create(currentUnitPrice: 0m));
+
+        Assert.Equal(0m, product.CurrentUnitPrice);
+        Assert.Equal(0m, response.CurrentUnitPrice);
+        repository.Verify(x => x.Update(product), Times.Once());
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(-5)]
@@ -226,6 +275,40 @@ public class ProductsManagementServiceTests
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             service.UpdateProduct(product.Id, ProductRequestFactory.Create(stockQuantity: stock)));
 
+        Assert.Equal(originalStock, product.StockQuantity);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithZeroStock_ThrowsInvalidDataExceptionWithoutMutation()
+    {
+        var product = CreateProduct();
+        var originalSku = product.Sku;
+        var originalInternalCode = product.InternalCode;
+        var originalName = product.Name;
+        var originalDescription = product.Description;
+        var originalPrice = product.CurrentUnitPrice;
+        var originalStock = product.StockQuantity;
+        var repository = CreateRepository(product);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.UpdateProduct(
+                product.Id,
+                ProductRequestFactory.Create(
+                    sku: "SKU-UPDATED",
+                    internalCode: "PRD-UPDATED",
+                    name: "Updated product",
+                    description: "Updated description",
+                    currentUnitPrice: 12.50m,
+                    stockQuantity: 0)));
+
+        Assert.Equal(originalSku, product.Sku);
+        Assert.Equal(originalInternalCode, product.InternalCode);
+        Assert.Equal(originalName, product.Name);
+        Assert.Equal(originalDescription, product.Description);
+        Assert.Equal(originalPrice, product.CurrentUnitPrice);
         Assert.Equal(originalStock, product.StockQuantity);
         repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
     }

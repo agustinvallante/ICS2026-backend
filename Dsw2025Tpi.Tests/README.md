@@ -43,8 +43,8 @@ dotnet test Dsw2025Tpi.sln
 
 Agustín owns the shared project conventions and A1–A4 unit tests for product service behavior and JWT generation. Axel owns B1–B4 integration host, isolated persistence, HTTP authentication/authorization/ownership, orders/stock, migrations, and exception-path coverage. Do not add integration dependencies or fixtures without coordinating ownership and setup with Axel.
 
-## Open business-rule dependency
+## EV-B03 boundary characterization (temporary)
 
-The exact EV-B03 acceptance rules for zero price and zero stock still need confirmation from the team's source of truth. Those boundary assertions are intentionally not included yet; confirm the rule first, then add tests without changing production logic as an incidental part of this suite.
+EV-B03's acceptance criteria are confirmed: price must be greater than zero, and stock may be zero, for both add and update. The current `ProductsManagementService` on `development` behaves differently at those boundaries: it accepts price zero and rejects stock zero. To keep this A1–A4 PR test-only and passing, the four boundary tests currently characterize that existing behavior for add/update; they do not claim it meets the EV-B03 acceptance criteria. When EV-B03 changes the production service, update these four tests to the required behavior and rerun the suite. No production logic is changed in this PR.
 
 Package versions are explicit in `Dsw2025Tpi.Tests.csproj`; do not upgrade production dependencies as part of this test setup.
