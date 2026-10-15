@@ -10,11 +10,13 @@ namespace Dsw2025Tpi.Application.Services;
 public class OrdersManagementService
 {
     private readonly IRepository _repository;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly ILogger<OrdersManagementService> _logger;
 
-    public OrdersManagementService(IRepository repository, ILogger<OrdersManagementService> logger)
+    public OrdersManagementService(IRepository repository, IUnitOfWork unitOfWork, ILogger<OrdersManagementService> logger)
     {
         _repository = repository;
+        _unitOfWork = unitOfWork;
         _logger = logger;
     }
 
@@ -120,6 +122,13 @@ public class OrdersManagementService
         if (request.Items == null || !request.Items.Any())
             throw new InvalidOrderDataException("La orden debe tener al menos un ítem.");
 
+        // El checkout completo es atómico; ante un conflicto de concurrencia se reintenta
+        // desde el principio, releyendo y revalidando el stock
+        return await _unitOfWork.ExecuteInTransactionAsync(() => CreateOrderInTransaction(request));
+    }
+
+    private async Task<OrderResponse> CreateOrderInTransaction(OrderRequest request)
+    {
         var customer = await _repository.GetById<Customer>(request.CustomerId);
         if (customer == null) throw new CustomerNotFoundException(request.CustomerId);
 

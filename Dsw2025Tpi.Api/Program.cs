@@ -162,6 +162,7 @@ public class Program
         builder.Services.AddAuthorization();
 
         builder.Services.AddScoped<IRepository, EfRepository>();
+        builder.Services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         builder.Services.AddScoped<ProductsManagementService>();
         builder.Services.AddScoped<OrdersManagementService>();
 
