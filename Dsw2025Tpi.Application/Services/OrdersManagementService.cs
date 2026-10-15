@@ -184,7 +184,7 @@ public class OrdersManagementService
         var order = await _repository.GetById<Order>(orderId, "OrderItems.Product", "Customer");
         if (order == null) throw new OrderNotFoundException(orderId);
 
-        if (!Enum.TryParse<OrderStatus>(newStatus, true, out var parsedStatus))
+        if (!Enum.TryParse<OrderStatus>(newStatus, true, out var parsedStatus) || !Enum.IsDefined(parsedStatus))
             throw new InvalidOrderStatusException($"Estado '{newStatus}' no válido.");
 
         order.Status = parsedStatus;

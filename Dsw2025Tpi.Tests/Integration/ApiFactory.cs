@@ -6,6 +6,7 @@ using Dsw2025Tpi.Domain.Entities;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -14,11 +15,13 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Dsw2025Tpi.Tests.Integration;
 
-// Each test owns its host and two databases. Closing the connections deletes all data.
+// Each test owns its host and isolated persistence; SQL Server uses a generated database.
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     private readonly SqliteConnection _data = new("Data Source=:memory:");
     private readonly SqliteConnection _auth = new("Data Source=:memory:");
+    private readonly string? _sqlConnectionString;
+    private readonly string? _sqlDatabaseName;
     public const string Key = "TEST_ONLY_INTEGRATION_KEY_0123456789_ABCDEF";
     public const string Issuer = "integration-tests";
     public const string Audience = "integration-client";
@@ -28,10 +31,28 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public Guid OtherProductId { get; } = Guid.NewGuid();
     public bool FailOrderSave { get; set; }
 
-    public ApiFactory()
+    public ApiFactory() : this(false) { }
+
+    public static ApiFactory ForSqlServer() => new(true);
+
+    private ApiFactory(bool useSqlServer)
     {
-        _data.Open();
-        _auth.Open();
+        if (useSqlServer)
+        {
+            _sqlDatabaseName = "ATB03_QA_" + Guid.NewGuid().ToString("N");
+            var connection = new SqlConnectionStringBuilder(
+                Environment.GetEnvironmentVariable("QA_SQLSERVER_CONNECTION_STRING")
+                ?? "Server=.\\SQLEXPRESS;Integrated Security=true;TrustServerCertificate=true;Connect Timeout=10");
+            // Never connect to the database named by the caller: each test owns a fresh database.
+            connection.InitialCatalog = _sqlDatabaseName;
+            connection.AttachDBFilename = string.Empty;
+            _sqlConnectionString = connection.ConnectionString;
+        }
+        else
+        {
+            _data.Open();
+            _auth.Open();
+        }
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -49,9 +70,18 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.RemoveAll<IDbContextOptionsConfiguration<Dsw2025TpiContext>>();
             services.RemoveAll<DbContextOptions<AuthenticateContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<AuthenticateContext>>();
-            services.AddDbContext<Dsw2025TpiContext>(o => o.UseSqlite(_data)
-                .AddInterceptors(new OrderFailureInterceptor(this)));
-            services.AddDbContext<AuthenticateContext>(o => o.UseSqlite(_auth));
+            if (_sqlConnectionString is not null)
+            {
+                services.AddDbContext<Dsw2025TpiContext>(o => o.UseSqlServer(_sqlConnectionString)
+                    .AddInterceptors(new OrderFailureInterceptor(this)));
+                services.AddDbContext<AuthenticateContext>(o => o.UseSqlServer(_sqlConnectionString));
+            }
+            else
+            {
+                services.AddDbContext<Dsw2025TpiContext>(o => o.UseSqlite(_data)
+                    .AddInterceptors(new OrderFailureInterceptor(this)));
+                services.AddDbContext<AuthenticateContext>(o => o.UseSqlite(_auth));
+            }
         });
     }
 
@@ -60,8 +90,17 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         var client = CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
         using var scope = Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<Dsw2025TpiContext>();
-        db.Database.EnsureCreated();
-        scope.ServiceProvider.GetRequiredService<AuthenticateContext>().Database.EnsureCreated();
+        var auth = scope.ServiceProvider.GetRequiredService<AuthenticateContext>();
+        if (_sqlConnectionString is not null)
+        {
+            auth.Database.Migrate();
+            db.Database.Migrate();
+        }
+        else
+        {
+            db.Database.EnsureCreated();
+            auth.Database.EnsureCreated();
+        }
         db.AddRange(
             new Customer { Id = CustomerId, Name = "Axel", Email = "axel@example.test" },
             new Customer { Id = OtherCustomerId, Name = "Other", Email = "other@example.test" },
@@ -90,6 +129,16 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             _data.Dispose();
             _auth.Dispose();
+            if (_sqlConnectionString is not null)
+            {
+                var connection = new SqlConnectionStringBuilder(_sqlConnectionString);
+                if (connection.InitialCatalog != _sqlDatabaseName ||
+                    !_sqlDatabaseName!.StartsWith("ATB03_QA_", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Refusing to delete a database not owned by this test.");
+                using var db = new Dsw2025TpiContext(new DbContextOptionsBuilder<Dsw2025TpiContext>()
+                    .UseSqlServer(_sqlConnectionString).Options);
+                db.Database.EnsureDeleted();
+            }
         }
     }
 

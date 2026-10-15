@@ -159,8 +159,12 @@ public class OrdersApiTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
-    [Fact]
-    public async Task UpdateStatus_AsAdmin_PersistsValidStatusAndRejectsInvalidStatus()
+    [Theory]
+    [InlineData("NOT_A_STATUS")]
+    [InlineData("999")]
+    [InlineData("-1")]
+    [InlineData("0")]
+    public async Task UpdateStatus_AsAdmin_PersistsValidStatusAndRejectsInvalidStatus(string invalidStatus)
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateSeededClient();
@@ -172,7 +176,7 @@ public class OrdersApiTests
         using var updated = await client.PutAsJsonAsync(path, "PROCESSING");
         Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
         factory.Inspect(db => Assert.Equal(OrderStatus.PROCESSING, db.Set<Order>().Single().Status));
-        using var invalid = await client.PutAsJsonAsync(path, "NOT_A_STATUS");
+        using var invalid = await client.PutAsJsonAsync(path, invalidStatus);
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
         factory.Inspect(db => Assert.Equal(OrderStatus.PROCESSING, db.Set<Order>().Single().Status));
     }
