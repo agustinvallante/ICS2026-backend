@@ -155,6 +155,14 @@ namespace Dsw2025Tpi.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("InternalCode")
+                        .IsUnique()
+                        .HasDatabaseName("UX_Products_InternalCode");
+
+                    b.HasIndex("Sku")
+                        .IsUnique()
+                        .HasDatabaseName("UX_Products_Sku");
+
                     b.ToTable("Products", (string)null);
                 });
 
