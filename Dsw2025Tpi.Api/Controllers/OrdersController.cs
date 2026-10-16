@@ -10,6 +10,13 @@ namespace Dsw2025Tpi.Api.Controllers;
 [Route("api/orders")]
 public class OrdersController : ControllerBase
 {
+    private Guid CurrentCustomerId()
+    {
+        if (!Guid.TryParse(User.FindFirst("customerId")?.Value, out var customerId) || customerId == Guid.Empty)
+            throw new UnauthorizedAccessException();
+        return customerId;
+    }
+
     private readonly OrdersManagementService _service;
     private readonly ILogger<OrdersController> _logger;
 
@@ -20,9 +27,11 @@ public class OrdersController : ControllerBase
     }
 
     [HttpPost]
+    [Authorize(Roles = "User,USER")]
     public async Task<IActionResult> CreateOrder([FromBody] OrderRequest request)
     {
         _logger.LogInformation("Recibida solicitud POST /api/orders para crear una nueva orden.");
+        if (CurrentCustomerId() != request.CustomerId) return Forbid();
         var created = await _service.CreateOrder(request);
         return CreatedAtAction(nameof(GetOrderById), new { id = created.OrderId }, created);
     }
@@ -32,7 +41,7 @@ public class OrdersController : ControllerBase
     {
         _logger.LogInformation("Recibida solicitud GET /api/orders con filtros.");
 
-        var result = await _service.GetOrders(filter);
+        var result = await _service.GetOrders(filter, User.IsInRole("Admin") ? null : CurrentCustomerId());
 
         // Devolvemos Ok con el resultado (aunque esté vacío, devuelve objeto con total 0)
         return Ok(result);
@@ -42,7 +51,7 @@ public class OrdersController : ControllerBase
     public async Task<IActionResult> GetOrderById(Guid id)
     {
         _logger.LogInformation("Recibida solicitud GET /api/orders/{OrderId}", id);
-        var order = await _service.GetOrderById(id);
+        var order = await _service.GetOrderById(id, User.IsInRole("Admin") ? null : CurrentCustomerId());
         return Ok(order);
     }
 
