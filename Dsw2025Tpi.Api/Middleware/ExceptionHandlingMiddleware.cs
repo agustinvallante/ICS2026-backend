@@ -1,6 +1,7 @@
 ﻿using Dsw2025Tpi.Api.Contract;
 using Dsw2025Tpi.Application.Exceptions;
 using Dsw2025Tpi.Data;
+using Dsw2025Tpi.Domain.Exceptions;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using System.Net;
@@ -63,6 +64,13 @@ namespace Dsw2025Tpi.Api.NewFolder
                 case DuplicatedEntityException:
                     status = HttpStatusCode.Conflict;
                     message = exception.Message;
+                    break;
+
+                // 409 Conflict: el recurso cambió por otra operación concurrente
+                // (reintentos agotados en el checkout, o RowVersion desactualizado fuera de él)
+                case ConcurrencyConflictException or DbUpdateConcurrencyException:
+                    status = HttpStatusCode.Conflict;
+                    message = "Los datos fueron modificados por otra operación. Intentá nuevamente.";
                     break;
 
                 // 409 Conflict: duplicado rechazado por un índice único de SQL Server (ej. altas concurrentes)
