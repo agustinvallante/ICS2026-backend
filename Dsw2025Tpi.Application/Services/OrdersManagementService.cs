@@ -21,14 +21,14 @@ public class OrdersManagementService
     }
 
     // --- GET ORDERS (CORREGIDO PARA PAGINACIÓN) ---
-    public async Task<OrderResponsePagination> GetOrders(OrderFilter filter)
+    public async Task<OrderResponsePagination> GetOrders(OrderFilter filter, Guid? customerId = null)
     {
         _logger.LogInformation("Obteniendo órdenes con filtros: {@Filter}", filter);
 
         // NOTA: Si tu repositorio no trae los items automáticamente, acá deberías usar un método 
         // que haga .Include(o => o.OrderItems).ThenInclude(i => i.Product)
         var query = await _repository.GetFiltered<Order>(
-            o => true,                  // Condición (Traer todo)
+            o => !customerId.HasValue || o.CustomerId == customerId,
             "Customer",                 // <--- IMPORTANTE: Para que aparezca el nombre del cliente
             "OrderItems",               // <--- IMPORTANTE: Para que la lista de items no esté vacía
             "OrderItems.Product"        // <--- IMPORTANTE: Para saber el nombre del producto dentro del item
@@ -86,12 +86,14 @@ public class OrdersManagementService
     }
 
     // --- GET BY ID ---
-    public async Task<OrderResponse> GetOrderById(Guid id)
+    public async Task<OrderResponse> GetOrderById(Guid id, Guid? customerId = null)
     {
         _logger.LogInformation("Buscando orden con ID: {OrderID}", id);
         var order = await _repository.GetById<Order>(id, "OrderItems.Product", "Customer");
 
         if (order == null) throw new OrderNotFoundException(id);
+        if (customerId.HasValue && order.CustomerId != customerId)
+            throw new UnauthorizedAccessException();
 
         var orderItemResponses = order.OrderItems?.Select(oi => new OrderItemResponse(
             oi.ProductId ?? Guid.Empty,
@@ -186,7 +188,7 @@ public class OrdersManagementService
         var order = await _repository.GetById<Order>(orderId, "OrderItems.Product", "Customer");
         if (order == null) throw new OrderNotFoundException(orderId);
 
-        if (!Enum.TryParse<OrderStatus>(newStatus, true, out var parsedStatus))
+        if (!Enum.TryParse<OrderStatus>(newStatus, true, out var parsedStatus) || !Enum.IsDefined(parsedStatus))
             throw new InvalidOrderStatusException($"Estado '{newStatus}' no válido.");
 
         order.Status = parsedStatus;

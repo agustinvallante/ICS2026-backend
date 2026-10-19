@@ -181,6 +181,7 @@ public class Program
         var app = builder.Build();
 
         //para crear los roles y cargar los administradores desde el archivo JSON
+        if (!app.Environment.IsEnvironment("Testing"))
         using (var scope = app.Services.CreateScope())
         {
             var services = scope.ServiceProvider;
