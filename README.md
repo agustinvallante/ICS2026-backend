@@ -155,3 +155,23 @@ Todas las instancias de la API que deban validar los mismos tokens deben utiliza
 - Retirar una clave del archivo actual no elimina sus versiones anteriores del historial de Git. Por eso, una clave expuesta debe considerarse comprometida y rotarse.
 
 Esta configuración permite mantener el mecanismo de autenticación existente sin exponer el material criptográfico utilizado para firmar y validar los tokens.
+
+## Gestión de configuración y trabajo en equipo
+
+El equipo acuerda el siguiente flujo de trabajo:
+
+- `main` contiene la versión estable.
+- `development` integra el trabajo del equipo.
+- Las ramas `feature/nombre-funcionalidad` nacen desde `development`
+  y se integran mediante Pull Request hacia `development`.
+- La promoción estable se realiza mediante Pull Request
+  de `development` hacia `main`.
+- Las ramas `hotfix/descripcion` nacen desde `main`.
+  Se integran allí mediante Pull Request y después se reintegran
+  en `development` mediante otra Pull Request.
+- No se realizan commits ni pushes directos sobre `main`
+  o `development`.
+- Toda Pull Request hacia las ramas principales requiere
+  la aprobación de otro integrante.
+
+[Documentación del Sprint 2 y evidencias](https://docs.google.com/document/d/1TBX0RXLDeNRAczGH_ERpyUQbhTneHeIfGx-c1b1B8Rw/edit?usp=drivesdk)
