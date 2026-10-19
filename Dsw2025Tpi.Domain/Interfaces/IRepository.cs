@@ -5,7 +5,6 @@ namespace Dsw2025Tpi.Domain.Interfaces;
 
 public interface IRepository
 {
-    Task<T> ExecuteInTransaction<T>(Func<Task<T>> action);
     Task<T?> GetById<T>(Guid id, params string[] include) where T : EntityBase;
     Task<IEnumerable<T>> GetAll<T>(params string[] include) where T : EntityBase;
     Task<T?> First<T>(Expression<Func<T, bool>> predicate, params string[] include) where T : EntityBase;

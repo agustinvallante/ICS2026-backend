@@ -17,14 +17,6 @@ public class EfRepository : IRepository
         _context = context;
     }
 
-    public async Task<T> ExecuteInTransaction<T>(Func<Task<T>> action)
-    {
-        await using var transaction = await _context.Database.BeginTransactionAsync();
-        var result = await action();
-        await transaction.CommitAsync();
-        return result;
-    }
-
     public async Task<T> Add<T>(T entity) where T : EntityBase
     {
         await _context.AddAsync(entity);

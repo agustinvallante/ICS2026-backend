@@ -72,6 +72,12 @@ public class Dsw2025TpiContext : DbContext
             .IsUnique()
             .HasDatabaseName(ProductInternalCodeUniqueIndex);
 
+            // Token de concurrencia optimista: SQL Server lo regenera en cada UPDATE y EF lo
+            // incluye en el WHERE, detectando si el producto cambió después de ser leído
+            eb.Property<byte[]>("RowVersion")
+            .IsRowVersion()
+            .IsRequired();
+
         });
 
         modelBuilder.Entity<Order>(eb =>
