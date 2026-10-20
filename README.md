@@ -174,4 +174,39 @@ El equipo acuerda el siguiente flujo de trabajo:
 - Toda Pull Request hacia las ramas principales requiere
   la aprobación de otro integrante.
 
+
+## Configuración externa de la API — TP3 / HU-T03
+
+La API utiliza el sistema de configuración de ASP.NET Core mediante
+WebApplication.CreateBuilder(args).
+
+Variables utilizadas:
+
+- ASPNETCORE_URLS: dirección y puerto de escucha.
+- ASPNETCORE_ENVIRONMENT: ambiente de ejecución.
+- DOTNET_ENVIRONMENT: variable alternativa de ambiente. Si se configuran
+  ambas variables de ambiente, se utilizan valores coincidentes.
+- DB_CONNECTION_STRING: cadena de conexión para los contextos de
+  autenticación y datos del sistema.
+- Jwt__Key: clave JWT externa, requerida para iniciar la aplicación.
+
+La conexión se resuelve en este orden:
+
+1. DB_CONNECTION_STRING.
+2. ConnectionStrings:Dsw2025TpiEntities.
+3. ConnectionStrings:DB_CONNECTION_STRING.
+
+Las claves jerárquicas pueden suministrarse mediante variables de
+entorno utilizando doble guion bajo; por ejemplo,
+ConnectionStrings__Dsw2025TpiEntities y Jwt__Key.
+
+Para verificar la configuración externa con dotnet run se utiliza
+--no-launch-profile, evitando que launchSettings.json imponga
+el puerto o el ambiente del perfil local.
+
+La configuración habitual de desarrollo se conserva en los archivos
+y perfiles existentes. Las credenciales reales se suministran
+externamente y no se incorporan al repositorio.
+
+
 [Documentación del Sprint 2 y evidencias](https://docs.google.com/document/d/1TBX0RXLDeNRAczGH_ERpyUQbhTneHeIfGx-c1b1B8Rw/edit?usp=drivesdk)
