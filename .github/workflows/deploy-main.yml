@@ -1,4 +1,5 @@
-name: Build and Deploy to Azure App Service (Publish Profile)
+
+name: Build and Deploy to Azure App Service
 
 on:
   push:
@@ -7,38 +8,64 @@ on:
     branches: [development, main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
-  REGISTRY: ${{ secrets.ACR_NAME }}.azurecr.io
-  IMAGE_NAME: dsw2025tpi-api
+  IMAGE_NAME: ics-backend
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 1. Obtener el código
+      # 1. Obtener el código
+      - name: Checkout repository
         uses: actions/checkout@v4
-      - name: 2. Iniciar sesión en Azure Container Registry (ACR)
+
+      # 2. Configurar .NET
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # 3. Restaurar dependencias
+      - name: Restore dependencies
+        run: dotnet restore Dsw2025Tpi.Api/Dsw2025Tpi.Api.csproj
+
+      # 4. Compilar la API
+      - name: Build API
+        run: dotnet build Dsw2025Tpi.Api/Dsw2025Tpi.Api.csproj -c Release --no-restore
+
+      # 5. Construir la imagen Docker
+      - name: Build Docker image
+        run: docker build -t "$IMAGE_NAME:ci" -f Dockerfile .
+
+      # 6. Iniciar sesión en Docker Hub
+      - name: Login to Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-      - name: 3. Construir la imagen Docker (.NET 8)
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 7. Publicar la imagen
+      - name: Push Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          docker build \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            -f Dockerfile \
-            .
-      - name: 4. Subir la imagen a ACR
-        if: github.event_name != 'pull_request'
-        run: |
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-      - name: 5. Desplegar el contenedor en Azure App Service
-        if: github.event_name != 'pull_request'
+          docker tag "$IMAGE_NAME:ci" "$HUB_USER/$IMAGE_NAME:$GITHUB_SHA"
+          docker tag "$IMAGE_NAME:ci" "$HUB_USER/$IMAGE_NAME:latest"
+
+          docker push "$HUB_USER/$IMAGE_NAME:$GITHUB_SHA"
+          docker push "$HUB_USER/$IMAGE_NAME:latest"
+
+      # 8. Desplegar en Azure
+      - name: Deploy to Azure App Service
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ secrets.APP_SERVICE_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
