@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: dsw2025tpi-api
+  IMAGE_NAME: ics-backend
 
 jobs:
   build-and-deploy:
