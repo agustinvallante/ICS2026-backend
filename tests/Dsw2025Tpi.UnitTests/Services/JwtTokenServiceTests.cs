@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
-namespace Dsw2025Tpi.Tests.Unit.Services;
+namespace Dsw2025Tpi.UnitTests.Services;
 
 public class JwtTokenServiceTests
 {

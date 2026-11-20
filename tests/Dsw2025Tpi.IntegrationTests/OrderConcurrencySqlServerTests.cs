@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace Dsw2025Tpi.Tests.Integration;
+namespace Dsw2025Tpi.IntegrationTests;
 
 // AT-B04 on the real provider: SQL Server rowversion, separate DbContexts per request/scope and the
 // EfUnitOfWork retry. Conflicts are made deterministic through ApiFactory.BeforeProductUpdate.

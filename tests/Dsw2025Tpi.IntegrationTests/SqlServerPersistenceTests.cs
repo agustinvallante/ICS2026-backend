@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace Dsw2025Tpi.Tests.Integration;
+namespace Dsw2025Tpi.IntegrationTests;
 
 [Trait("Category", "Integration")]
 [Trait("Provider", "SqlServer")]

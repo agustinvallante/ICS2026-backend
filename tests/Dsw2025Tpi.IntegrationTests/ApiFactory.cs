@@ -13,7 +13,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace Dsw2025Tpi.Tests.Integration;
+namespace Dsw2025Tpi.IntegrationTests;
 
 // Each test owns its host and isolated persistence; SQL Server uses a generated database.
 public sealed class ApiFactory : WebApplicationFactory<Program>
