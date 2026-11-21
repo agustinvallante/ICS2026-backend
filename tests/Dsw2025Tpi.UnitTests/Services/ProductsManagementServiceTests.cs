@@ -386,6 +386,75 @@ public class ProductsManagementServiceTests
         repository.Verify(x => x.Update(product), Times.Once());
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetProducts_WhenIncludeInactiveIsFalse_ReturnsOnlyActiveProducts()
+    {
+        // Arrange
+        var first = CreateProduct(sku: "SKU-A", name: "Active A");
+        var second = CreateProduct(sku: "SKU-B", name: "Active B");
+        var inactive = CreateProduct(sku: "SKU-C", name: "Inactive C", isActive: false);
+        var repository = CreateRepository(inactive, second, first);
+        var service = CreateService(repository);
+        var filter = new ProductModel.FilterProduct(Status: null, Search: null, PageNumber: 1, PageSize: 10);
+
+        // Act
+        var response = await service.GetProducts(filter, includeInactive: false);
+
+        // Assert
+        Assert.Equal(new[] { first.Id, second.Id }, response.ProductItems.Select(product => product.Id));
+        Assert.All(response.ProductItems, product => Assert.True(product.IsActive));
+        Assert.Equal(2, response.Total);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetProducts_WithPaginationFilter_AppliesSkipAndTakeCorrectly()
+    {
+        // Arrange
+        var products = Enumerable.Range(1, 15)
+            .Reverse()
+            .Select(index => CreateProduct(sku: $"SKU-{index:D2}", name: $"Product {index:D2}"))
+            .ToArray();
+        var repository = CreateRepository(products);
+        var service = CreateService(repository);
+        var filter = new ProductModel.FilterProduct(Status: null, Search: null, PageNumber: 2, PageSize: 5);
+
+        // Act
+        var response = await service.GetProducts(filter);
+
+        // Assert
+        Assert.Equal(
+            new[] { "SKU-06", "SKU-07", "SKU-08", "SKU-09", "SKU-10" },
+            response.ProductItems.Select(product => product.Sku));
+        Assert.Equal(15, response.Total);
+    }
+
+    [Theory]
+    [InlineData("Mouse")]
+    [InlineData("mOuSe")]
+    [Trait("Category", "Unit")]
+    public async Task GetProducts_WithSearchTerm_FiltersByNameSkuOrInternalCode(string searchTerm)
+    {
+        // Arrange
+        var matchesName = CreateProduct(sku: "SKU-01", name: "Gaming Mouse XL", internalCode: "CODE-01");
+        var matchesSku = CreateProduct(sku: "SKU-Mouse-02", name: "Keyboard", internalCode: "CODE-02");
+        var matchesInternalCode = CreateProduct(sku: "SKU-03", name: "Stand", internalCode: "CODE-Mouse-03");
+        var unrelated = CreateProduct(sku: "SKU-04", name: "Monitor", internalCode: "CODE-04");
+        var repository = CreateRepository(unrelated, matchesInternalCode, matchesSku, matchesName);
+        var service = CreateService(repository);
+        var filter = new ProductModel.FilterProduct(Status: null, Search: searchTerm, PageNumber: 1, PageSize: 10);
+
+        // Act
+        var response = await service.GetProducts(filter);
+
+        // Assert
+        Assert.Equal(
+            new[] { matchesName.Id, matchesSku.Id, matchesInternalCode.Id },
+            response.ProductItems.Select(product => product.Id));
+        Assert.Equal(3, response.Total);
+    }
+
     private static ProductsManagementService CreateService(Mock<IRepository> repository)
     {
         return new ProductsManagementService(
@@ -401,6 +470,9 @@ public class ProductsManagementServiceTests
         repository.Setup(x => x.First<Product>(It.IsAny<Expression<Func<Product, bool>>>(), It.IsAny<string[]>()))
             .Returns((Expression<Func<Product, bool>> predicate, string[] _) =>
                 Task.FromResult(products.AsQueryable().FirstOrDefault(predicate)));
+        repository.Setup(x => x.GetFiltered<Product>(It.IsAny<Expression<Func<Product, bool>>>(), It.IsAny<string[]>()))
+            .Returns((Expression<Func<Product, bool>> predicate, string[] _) =>
+                Task.FromResult<IEnumerable<Product>>(products.AsQueryable().Where(predicate).ToList()));
         repository.Setup(x => x.Add(It.IsAny<Product>()))
             .Returns((Product product) => Task.FromResult(product));
         repository.Setup(x => x.Update(It.IsAny<Product>()))
@@ -410,15 +482,17 @@ public class ProductsManagementServiceTests
 
     private static Product CreateProduct(
         string sku = "SKU-EXISTING",
-        bool isActive = true)
+        bool isActive = true,
+        string name = "Existing product",
+        string internalCode = "PRD-EXISTING")
     {
         return new Product(
             sku,
-            "Existing product",
+            name,
             9.99m,
             4,
             "Existing description",
-            "PRD-EXISTING")
+            internalCode)
         {
             IsActive = isActive
         };
