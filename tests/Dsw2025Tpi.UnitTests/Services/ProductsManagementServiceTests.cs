@@ -12,6 +12,9 @@ namespace Dsw2025Tpi.UnitTests.Services;
 
 public class ProductsManagementServiceTests
 {
+    private const string InvalidUnitPriceMessage = "El precio unitario debe ser mayor a cero.";
+    private const string InvalidStockQuantityMessage = "La cantidad de stock no puede ser negativa.";
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -45,45 +48,25 @@ public class ProductsManagementServiceTests
     }
 
     [Theory]
-    [InlineData(-0.01)]
-    [InlineData(-1)]
+    [InlineData(-0.01, 5, InvalidUnitPriceMessage)]
+    [InlineData(-1, 5, InvalidUnitPriceMessage)]
+    [InlineData(0, 5, InvalidUnitPriceMessage)]
+    [InlineData(12.50, -1, InvalidStockQuantityMessage)]
+    [InlineData(12.50, -5, InvalidStockQuantityMessage)]
     [Trait("Category", "Unit")]
-    public async Task AddProduct_WithNegativePrice_ThrowsInvalidDataException(decimal price)
+    public async Task AddProduct_WithInvalidStockOrPrice_ThrowsInvalidDataException(
+        decimal price, int stock, string expectedMessage)
     {
         var repository = CreateRepository();
         var service = CreateService(repository);
+        var request = ProductRequestFactory.Create(currentUnitPrice: price, stockQuantity: stock);
 
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            service.AddProduct(ProductRequestFactory.Create(currentUnitPrice: price)));
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => service.AddProduct(request));
 
-        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
-    public async Task AddProduct_WithZeroPrice_ThrowsInvalidDataExceptionWithoutWriting()
-    {
-        var repository = CreateRepository();
-        var service = CreateService(repository);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            service.AddProduct(ProductRequestFactory.Create(currentUnitPrice: 0m)));
-
-        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
-    }
-
-    [Theory]
-    [InlineData(-1)]
-    [InlineData(-5)]
-    [Trait("Category", "Unit")]
-    public async Task AddProduct_WithNegativeStock_ThrowsInvalidDataException(int stock)
-    {
-        var repository = CreateRepository();
-        var service = CreateService(repository);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            service.AddProduct(ProductRequestFactory.Create(stockQuantity: stock)));
-
+        Assert.Equal(expectedMessage, exception.Message);
+        repository.Verify(
+            x => x.First<Product>(It.IsAny<Expression<Func<Product, bool>>>(), It.IsAny<string[]>()),
+            Times.Never());
         repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
     }
 
@@ -108,7 +91,7 @@ public class ProductsManagementServiceTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task AddProduct_WithDuplicateSku_ThrowsDuplicatedEntityExceptionWithoutWriting()
+    public async Task AddProduct_WithDuplicateSku_ThrowsDuplicatedEntityException()
     {
         var existing = CreateProduct(sku: "SKU-001");
         var repository = CreateRepository(existing);
@@ -122,7 +105,7 @@ public class ProductsManagementServiceTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task AddProduct_WithValidRequest_AddsProductAndReturnsItsValues()
+    public async Task AddProduct_WithValidData_ReturnsProductAndCallsRepositoryAdd()
     {
         var repository = CreateRepository();
         var request = ProductRequestFactory.Create(
