@@ -126,6 +126,61 @@ public class ApiAccessTests
         factory.Inspect(db => Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count()));
     }
 
+    [Theory]
+    [InlineData("POST", 0.0, 1, 400)]
+    [InlineData("POST", -1.0, 1, 400)]
+    [InlineData("POST", 12.5, -1, 400)]
+    [InlineData("POST", 12.5, 0, 201)]
+    [InlineData("PUT", 0.0, 1, 400)]
+    [InlineData("PUT", -1.0, 1, 400)]
+    [InlineData("PUT", 12.5, -1, 400)]
+    [InlineData("PUT", 12.5, 0, 200)]
+    public async Task ProductEndpoints_EnforcePriceAndStockBoundaries(
+        string method, decimal price, int stock, int expectedStatus)
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient("Admin");
+        var isUpdate = method == "PUT";
+        var request = ProductRequestFactory.Create(
+            sku: isUpdate ? "SKU-1" : "SKU-NEW",
+            currentUnitPrice: price,
+            stockQuantity: stock);
+
+        using var response = isUpdate
+            ? await client.PutAsJsonAsync($"/api/products/{factory.ProductId}", request)
+            : await client.PostAsJsonAsync("/api/products", request);
+
+        Assert.Equal((HttpStatusCode)expectedStatus, response.StatusCode);
+
+        if (expectedStatus == (int)HttpStatusCode.BadRequest)
+        {
+            var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+            var expectedMessage = price <= 0m
+                ? "El precio unitario debe ser mayor a cero."
+                : "La cantidad de stock no puede ser negativa.";
+            Assert.Equal(expectedMessage, error.GetProperty("Message").GetString());
+
+            factory.Inspect(db =>
+            {
+                Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count());
+                var unchanged = db.Set<Dsw2025Tpi.Domain.Entities.Product>()
+                    .Single(product => product.Id == factory.ProductId);
+                Assert.Equal(12.50m, unchanged.CurrentUnitPrice);
+                Assert.Equal(5, unchanged.StockQuantity);
+            });
+            return;
+        }
+
+        factory.Inspect(db =>
+        {
+            var persisted = isUpdate
+                ? db.Set<Dsw2025Tpi.Domain.Entities.Product>().Single(product => product.Id == factory.ProductId)
+                : db.Set<Dsw2025Tpi.Domain.Entities.Product>().Single(product => product.Sku == "SKU-NEW");
+            Assert.Equal(price, persisted.CurrentUnitPrice);
+            Assert.Equal(0, persisted.StockQuantity);
+        });
+    }
+
     [Fact]
     public async Task CreateOrder_WithMalformedBody_ReturnsBadRequest()
     {
