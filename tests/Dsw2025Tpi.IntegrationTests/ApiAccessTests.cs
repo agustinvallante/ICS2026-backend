@@ -5,11 +5,11 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
-using Dsw2025Tpi.Tests.Support;
+using Dsw2025Tpi.Tests.Shared;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
-namespace Dsw2025Tpi.Tests.Integration;
+namespace Dsw2025Tpi.IntegrationTests;
 
 [Trait("Category", "Integration")]
 public class ApiAccessTests
