@@ -92,31 +92,20 @@ namespace Dsw2025Tpi.Application.Services
         {
             _logger.LogInformation("Consulta de productos. IncludeInactive: {IncludeInactive}, StatusFilter: {Status}", includeInactive, filter.Status);
 
-            
             bool? isActiveFilter = null;
             if (!string.IsNullOrEmpty(filter.Status) && bool.TryParse(filter.Status, out bool parsedStatus))
             {
                 isActiveFilter = parsedStatus;
             }
 
+            var searchTerm = filter.Search?.ToUpperInvariant();
             var filteredProducts = await _repository.GetFiltered<Product>(p =>
-                
                 (includeInactive || p.IsActive)
-
-                &&
-
-                
-                (!isActiveFilter.HasValue || p.IsActive == isActiveFilter.Value)
-
-                &&
-
-                
-                (string.IsNullOrEmpty(filter.Search)
-                    || (p.Name != null && p.Name.Contains(filter.Search))
-                    || (p.InternalCode != null && p.InternalCode.Contains(filter.Search))
-                    || (p.Sku != null && p.Sku.Contains(filter.Search))
-                )
-            );
+                && (!isActiveFilter.HasValue || p.IsActive == isActiveFilter.Value)
+                && (string.IsNullOrEmpty(searchTerm)
+                    || (p.Name != null && p.Name.ToUpper().Contains(searchTerm))
+                    || (p.InternalCode != null && p.InternalCode.ToUpper().Contains(searchTerm))
+                    || (p.Sku != null && p.Sku.ToUpper().Contains(searchTerm))));
 
             if (filteredProducts == null || !filteredProducts.Any())
             {
