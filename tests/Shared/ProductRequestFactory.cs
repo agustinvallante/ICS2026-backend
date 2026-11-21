@@ -1,6 +1,6 @@
 using Dsw2025Tpi.Application.Dtos;
 
-namespace Dsw2025Tpi.Tests.Support;
+namespace Dsw2025Tpi.Tests.Shared;
 
 public static class ProductRequestFactory
 {

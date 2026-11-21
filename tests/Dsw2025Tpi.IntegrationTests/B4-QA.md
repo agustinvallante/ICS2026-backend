@@ -1,5 +1,8 @@
 # Evidencia B4 y correcciones de revisión
 
+> [!NOTE]
+> Este documento es la evidencia histórica de AT-B03 y se conserva tal como se registró. En CARD-TP4-01 el proyecto `Dsw2025Tpi.Tests` se separó en `tests/Dsw2025Tpi.UnitTests` y `tests/Dsw2025Tpi.IntegrationTests`, así que las rutas de los comandos de abajo ya no existen. Los comandos equivalentes actuales están en [tests/README.md](../README.md); por ejemplo, `dotnet test tests/Dsw2025Tpi.IntegrationTests/Dsw2025Tpi.IntegrationTests.csproj --filter 'Provider=SqlServer'`.
+
 Fecha: 2026-10-15. Rama: `feature/at-b03-tests-integracion`, sobre `84076c5` con los cambios locales de esta revisión.
 
 ## Resultado

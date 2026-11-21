@@ -115,6 +115,28 @@ La API también puede ejecutarse desde Visual Studio, seleccionando `Dsw2025Tpi.
 > [!IMPORTANT]
 > La API requiere una clave JWT correctamente configurada. Si la clave falta o no cumple la longitud mínima exigida, el inicio de la aplicación se interrumpe con un mensaje de error.
 
+## Pruebas automatizadas
+
+Las pruebas del backend están en la carpeta `tests/`, separadas en dos proyectos:
+
+- `tests/Dsw2025Tpi.UnitTests`: pruebas unitarias con xUnit y Moq. No requieren base de datos ni red.
+- `tests/Dsw2025Tpi.IntegrationTests`: pruebas de integración sobre la API real con `WebApplicationFactory`, usando SQLite en memoria. Los casos marcados con `Provider=SqlServer` requieren un SQL Server accesible (por defecto `.\SQLEXPRESS`, configurable con la variable `QA_SQLSERVER_CONNECTION_STRING`).
+
+Comandos principales, desde la raíz del repositorio:
+
+```powershell
+# Suite completa (incluye los casos de SQL Server).
+dotnet test Dsw2025Tpi.sln
+
+# Solo pruebas unitarias.
+dotnet test Dsw2025Tpi.sln --filter Category=Unit
+
+# Integración sin SQL Server.
+dotnet test Dsw2025Tpi.sln --filter "Category=Integration&Provider!=SqlServer"
+```
+
+La estructura, las convenciones y el detalle de cada suite están en [tests/README.md](tests/README.md).
+
 ## Gestión y rotación del secreto JWT
 
 ### Rotación en desarrollo

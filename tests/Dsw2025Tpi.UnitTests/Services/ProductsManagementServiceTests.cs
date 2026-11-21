@@ -3,12 +3,12 @@ using Dsw2025Tpi.Application.Dtos;
 using Dsw2025Tpi.Application.Services;
 using Dsw2025Tpi.Domain.Entities;
 using Dsw2025Tpi.Domain.Interfaces;
-using Dsw2025Tpi.Tests.Support;
+using Dsw2025Tpi.Tests.Shared;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
-namespace Dsw2025Tpi.Tests.Unit.Services;
+namespace Dsw2025Tpi.UnitTests.Services;
 
 public class ProductsManagementServiceTests
 {
