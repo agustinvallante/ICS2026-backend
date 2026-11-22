@@ -2,6 +2,7 @@ using Dsw2025Tpi.Application.Dtos;
 using Dsw2025Tpi.Application.Exceptions;
 using Dsw2025Tpi.Application.Services;
 using Dsw2025Tpi.Domain.Entities;
+using Dsw2025Tpi.Domain.Exceptions;
 using Dsw2025Tpi.Domain.Interfaces;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -103,16 +104,200 @@ public class OrdersManagementServiceTests
         repository.Verify(x => x.Add(It.IsAny<Order>()), Times.Never());
     }
 
+    // EV-B02 CA1: lecturas, descuentos de stock y alta de la orden ocurren dentro de una única transacción
+    [Fact]
+    public async Task CreateOrder_WithValidOrder_RunsTheWholeCheckoutInsideOneTransaction()
+    {
+        // Arrange
+        var customer = new Customer { Name = "Test customer" };
+        var product = new Product("SKU-01", "Test product", 10m, 5, null, "CODE-01");
+        var request = CreateRequest(customer.Id, new OrderItemRequest(product.Id, 2));
+        var insideTransaction = false;
+        var callsOutsideTransaction = new List<string>();
+        var repository = new Mock<IRepository>(MockBehavior.Strict);
+        repository.Setup(x => x.GetById<Customer>(customer.Id, It.IsAny<string[]>()))
+            .Callback(() => { if (!insideTransaction) callsOutsideTransaction.Add("GetById<Customer>"); })
+            .ReturnsAsync(customer);
+        repository.Setup(x => x.GetById<Product>(product.Id, It.IsAny<string[]>()))
+            .Callback(() => { if (!insideTransaction) callsOutsideTransaction.Add("GetById<Product>"); })
+            .ReturnsAsync(product);
+        repository.Setup(x => x.Update(product))
+            .Callback(() => { if (!insideTransaction) callsOutsideTransaction.Add("Update"); })
+            .ReturnsAsync(product);
+        repository.Setup(x => x.Add(It.IsAny<Order>()))
+            .Callback(() => { if (!insideTransaction) callsOutsideTransaction.Add("Add"); })
+            .Returns((Order order) => Task.FromResult(order));
+        var unitOfWork = new Mock<IUnitOfWork>(MockBehavior.Strict);
+        unitOfWork.Setup(x => x.ExecuteInTransactionAsync(It.IsAny<Func<Task<OrderResponse>>>()))
+            .Returns(async (Func<Task<OrderResponse>> operation) =>
+            {
+                insideTransaction = true;
+                try { return await operation(); }
+                finally { insideTransaction = false; }
+            });
+        var service = CreateService(repository, unitOfWork);
+
+        // Act
+        await service.CreateOrder(request);
+
+        // Assert
+        unitOfWork.Verify(x => x.ExecuteInTransactionAsync(It.IsAny<Func<Task<OrderResponse>>>()), Times.Once());
+        Assert.Empty(callsOutsideTransaction);
+        repository.Verify(x => x.Update(product), Times.Once());
+        repository.Verify(x => x.Add(It.IsAny<Order>()), Times.Once());
+    }
+
+    // EV-B02 CA2: la orden se valida completa antes de descontar stock, así que un ítem posterior
+    // sin stock suficiente no deja escrito el descuento de los ítems anteriores
+    [Fact]
+    public async Task CreateOrder_WhenALaterProductHasInsufficientStock_DoesNotUpdateAnyStock()
+    {
+        // Arrange
+        var customer = new Customer { Name = "Test customer" };
+        var firstProduct = new Product("SKU-01", "First product", 10m, 5, null, "CODE-01");
+        var secondProduct = new Product("SKU-02", "Second product", 4m, 1, null, "CODE-02");
+        var request = CreateRequest(
+            customer.Id,
+            new OrderItemRequest(firstProduct.Id, 2),
+            new OrderItemRequest(secondProduct.Id, 3));
+        var repository = new Mock<IRepository>(MockBehavior.Strict);
+        repository.Setup(x => x.GetById<Customer>(customer.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(customer);
+        repository.Setup(x => x.GetById<Product>(firstProduct.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(firstProduct);
+        repository.Setup(x => x.GetById<Product>(secondProduct.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(secondProduct);
+        var service = CreateService(repository);
+
+        // Act and assert
+        await Assert.ThrowsAsync<InsufficientStockException>(() => service.CreateOrder(request));
+        Assert.Equal(5, firstProduct.StockQuantity);
+        Assert.Equal(1, secondProduct.StockQuantity);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+        repository.Verify(x => x.Add(It.IsAny<Order>()), Times.Never());
+    }
+
+    // Un producto repetido en la orden se valida contra la cantidad total pedida
+    [Fact]
+    public async Task CreateOrder_WhenRepeatedProductExceedsStockInTotal_ThrowsWithoutUpdatingStock()
+    {
+        // Arrange
+        var customer = new Customer { Name = "Test customer" };
+        var product = new Product("SKU-01", "Test product", 10m, 4, null, "CODE-01");
+        var request = CreateRequest(
+            customer.Id,
+            new OrderItemRequest(product.Id, 3),
+            new OrderItemRequest(product.Id, 2));
+        var repository = new Mock<IRepository>(MockBehavior.Strict);
+        repository.Setup(x => x.GetById<Customer>(customer.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(customer);
+        repository.Setup(x => x.GetById<Product>(product.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(product);
+        var service = CreateService(repository);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<InsufficientStockException>(() => service.CreateOrder(request));
+
+        // Assert
+        Assert.Contains("Stock actual: 4, solicitado: 5", exception.Message);
+        Assert.Equal(4, product.StockQuantity);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+        repository.Verify(x => x.Add(It.IsAny<Order>()), Times.Never());
+    }
+
+    [Fact]
+    public async Task CreateOrder_WhenRepeatedProductFitsStock_DecrementsTheTotalOnce()
+    {
+        // Arrange
+        var customer = new Customer { Name = "Test customer" };
+        var product = new Product("SKU-01", "Test product", 10m, 5, null, "CODE-01");
+        var request = CreateRequest(
+            customer.Id,
+            new OrderItemRequest(product.Id, 1),
+            new OrderItemRequest(product.Id, 2));
+        var repository = new Mock<IRepository>(MockBehavior.Strict);
+        repository.Setup(x => x.GetById<Customer>(customer.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(customer);
+        repository.Setup(x => x.GetById<Product>(product.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(product);
+        repository.Setup(x => x.Update(It.Is<Product>(p => p.Id == product.Id && p.StockQuantity == 2)))
+            .ReturnsAsync(product);
+        repository.Setup(x => x.Add(It.IsAny<Order>()))
+            .Returns((Order order) => Task.FromResult(order));
+        var service = CreateService(repository);
+
+        // Act
+        var response = await service.CreateOrder(request);
+
+        // Assert
+        Assert.Equal(2, product.StockQuantity);
+        Assert.Equal(30m, response.TotalAmount);
+        Assert.Equal(new[] { 1, 2 }, response.Items.Select(item => item.Quantity));
+        repository.Verify(x => x.GetById<Product>(product.Id, It.IsAny<string[]>()), Times.Once());
+        repository.Verify(x => x.Update(product), Times.Once());
+    }
+
+    // EV-B02 CA3/CA4: un fallo al persistir se informa como error de checkout controlado,
+    // conservando la causa original para el log
+    [Fact]
+    public async Task CreateOrder_WhenOrderPersistenceFails_ThrowsCheckoutFailedWithOriginalCause()
+    {
+        // Arrange
+        var customer = new Customer { Name = "Test customer" };
+        var product = new Product("SKU-01", "Test product", 10m, 5, null, "CODE-01");
+        var request = CreateRequest(customer.Id, new OrderItemRequest(product.Id, 2));
+        var persistenceFailure = new InvalidOperationException("Simulated persistence failure");
+        var repository = new Mock<IRepository>(MockBehavior.Strict);
+        repository.Setup(x => x.GetById<Customer>(customer.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(customer);
+        repository.Setup(x => x.GetById<Product>(product.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(product);
+        repository.Setup(x => x.Update(product))
+            .ReturnsAsync(product);
+        repository.Setup(x => x.Add(It.IsAny<Order>()))
+            .ThrowsAsync(persistenceFailure);
+        var service = CreateService(repository);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<CheckoutFailedException>(() => service.CreateOrder(request));
+
+        // Assert
+        Assert.Same(persistenceFailure, exception.InnerException);
+        Assert.DoesNotContain("Simulated", exception.Message);
+    }
+
+    // Los conflictos de concurrencia no se ocultan detrás del error genérico de checkout
+    [Fact]
+    public async Task CreateOrder_WhenConcurrencyConflictPersists_PropagatesConflictUnchanged()
+    {
+        // Arrange
+        var conflict = new ConcurrencyConflictException(new Exception("RowVersion mismatch"));
+        var unitOfWork = new Mock<IUnitOfWork>(MockBehavior.Strict);
+        unitOfWork.Setup(x => x.ExecuteInTransactionAsync(It.IsAny<Func<Task<OrderResponse>>>()))
+            .ThrowsAsync(conflict);
+        var service = CreateService(new Mock<IRepository>(MockBehavior.Strict), unitOfWork);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<ConcurrencyConflictException>(
+            () => service.CreateOrder(CreateRequest(Guid.NewGuid(), new OrderItemRequest(Guid.NewGuid(), 1))));
+
+        // Assert
+        Assert.Same(conflict, exception);
+    }
+
     private static OrderRequest CreateRequest(Guid customerId, params OrderItemRequest[] items)
     {
         return new OrderRequest(customerId, "Test shipping address", "Test billing address", null, items.ToList());
     }
 
-    private static OrdersManagementService CreateService(Mock<IRepository> repository)
+    private static OrdersManagementService CreateService(Mock<IRepository> repository, Mock<IUnitOfWork>? unitOfWork = null)
     {
-        var unitOfWork = new Mock<IUnitOfWork>(MockBehavior.Strict);
-        unitOfWork.Setup(x => x.ExecuteInTransactionAsync(It.IsAny<Func<Task<OrderResponse>>>()))
-            .Returns((Func<Task<OrderResponse>> operation) => operation());
+        if (unitOfWork is null)
+        {
+            unitOfWork = new Mock<IUnitOfWork>(MockBehavior.Strict);
+            unitOfWork.Setup(x => x.ExecuteInTransactionAsync(It.IsAny<Func<Task<OrderResponse>>>()))
+                .Returns((Func<Task<OrderResponse>> operation) => operation());
+        }
 
         return new OrdersManagementService(
             repository.Object,

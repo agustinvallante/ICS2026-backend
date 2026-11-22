@@ -38,16 +38,24 @@ namespace Dsw2025Tpi.Api.NewFolder
         {
             HttpStatusCode status;
             string message;
+            // Código estable para que el frontend identifique el error sin depender del texto del mensaje
+            var code = string.Empty;
 
             switch (exception)
             {
+                // 400 Bad Request: el checkout se rechazó por falta de stock sin modificar nada
+                case InsufficientStockException:
+                    status = HttpStatusCode.BadRequest;
+                    message = exception.Message;
+                    code = ErrorCodes.InsufficientStock;
+                    break;
+
                 // 400 Bad Request
                 case InvalidOrderDataException or
                      InvalidDataException or
                      InvalidOrderStatusException or
                      ArgumentException or
-                     InsufficientStockException or
-                     ArgumentNullException: 
+                     ArgumentNullException:
                     status = HttpStatusCode.BadRequest;
                     message = exception.Message;
                     break;
@@ -71,6 +79,15 @@ namespace Dsw2025Tpi.Api.NewFolder
                 case ConcurrencyConflictException or DbUpdateConcurrencyException:
                     status = HttpStatusCode.Conflict;
                     message = "Los datos fueron modificados por otra operación. Intentá nuevamente.";
+                    code = ErrorCodes.ConcurrencyConflict;
+                    break;
+
+                // 500: el checkout falló al persistir y se revirtió por completo (EV-B02);
+                // se informa un mensaje accionable sin exponer detalles de EF/SQL
+                case CheckoutFailedException:
+                    status = HttpStatusCode.InternalServerError;
+                    message = exception.Message;
+                    code = ErrorCodes.CheckoutFailed;
                     break;
 
                 // 409 Conflict: duplicado rechazado por un índice único de SQL Server (ej. altas concurrentes)
@@ -94,7 +111,7 @@ namespace Dsw2025Tpi.Api.NewFolder
                     break;
             }
 
-            var result = JsonSerializer.Serialize(new ApiError("" ,message));
+            var result = JsonSerializer.Serialize(new ApiError(code, message));
             context.Response.ContentType = "application/json";
             context.Response.StatusCode = (int)status;
             return context.Response.WriteAsync(result);

@@ -73,6 +73,7 @@ public class OrdersApiTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
         var message = error.GetProperty("Message").GetString();
         Assert.Contains("no tiene suficiente stock", message);
         Assert.Contains("Stock actual: 5, solicitado: 6", message);
@@ -143,8 +144,14 @@ public class OrdersApiTests
 
         Assert.Equal(persistenceFailure ? HttpStatusCode.InternalServerError : HttpStatusCode.BadRequest, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        // EV-B02 CA4: error controlado con código estable y mensaje accionable, sin detalles internos
+        Assert.Equal(persistenceFailure ? "CHECKOUT_FAILED" : "INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
+        var message = error.GetProperty("Message").GetString();
         if (persistenceFailure)
-            Assert.Equal("Ocurrió un error inesperado en el servidor.", error.GetProperty("Message").GetString());
+        {
+            Assert.Equal("No se pudo completar la compra. No se registró la orden ni se descontó stock; podés intentarlo nuevamente.", message);
+            Assert.DoesNotContain("Simulated", message);
+        }
         AssertUnchanged(factory);
     }
 

@@ -2,6 +2,7 @@
 using Dsw2025Tpi.Application.Exceptions;
 using Dsw2025Tpi.Domain.Entities;
 using Dsw2025Tpi.Domain.Enums;
+using Dsw2025Tpi.Domain.Exceptions;
 using Dsw2025Tpi.Domain.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -124,30 +125,69 @@ public class OrdersManagementService
         if (request.Items == null || !request.Items.Any())
             throw new InvalidOrderDataException("La orden debe tener al menos un ítem.");
 
-        // El checkout completo es atómico; ante un conflicto de concurrencia se reintenta
-        // desde el principio, releyendo y revalidando el stock
-        return await _unitOfWork.ExecuteInTransactionAsync(() => CreateOrderInTransaction(request));
+        try
+        {
+            // El checkout completo es atómico; ante un conflicto de concurrencia se reintenta
+            // desde el principio, releyendo y revalidando el stock
+            return await _unitOfWork.ExecuteInTransactionAsync(() => CreateOrderInTransaction(request));
+        }
+        catch (Exception ex) when (!IsExpectedCheckoutError(ex))
+        {
+            // La transacción ya se revirtió: se informa un error controlado sin exponer detalles de EF/SQL
+            throw new CheckoutFailedException(ex);
+        }
     }
+
+    // Errores de negocio o de concurrencia que la API ya traduce a una respuesta específica
+    private static bool IsExpectedCheckoutError(Exception exception) => exception is
+        InvalidOrderDataException or
+        CustomerNotFoundException or
+        InsufficientStockException or
+        ArgumentException or
+        ConcurrencyConflictException or
+        OperationCanceledException;
 
     private async Task<OrderResponse> CreateOrderInTransaction(OrderRequest request)
     {
         var customer = await _repository.GetById<Customer>(request.CustomerId);
         if (customer == null) throw new CustomerNotFoundException(request.CustomerId);
 
-        var orderItems = new List<OrderItem>();
-        decimal total = 0m;
+        // 1) Se valida la orden completa antes de modificar stock: si un ítem es inválido
+        //    o no tiene stock suficiente, la orden se rechaza sin escribir nada
+        var products = new Dictionary<Guid, Product>();
+        var requestedByProduct = new Dictionary<Guid, int>();
 
         foreach (var item in request.Items)
         {
             if (item.Quantity <= 0) throw new InvalidOrderDataException($"Cantidad inválida para producto {item.ProductId}");
 
-            var product = await _repository.GetById<Product>(item.ProductId);
-            if (product == null || !product.IsActive) throw new ArgumentException($"Producto {item.ProductId} no disponible.");
-            if (product.StockQuantity < item.Quantity) throw new InsufficientStockException(product.Name, product.StockQuantity, item.Quantity);
+            if (!products.TryGetValue(item.ProductId, out var product))
+            {
+                product = await _repository.GetById<Product>(item.ProductId);
+                if (product == null || !product.IsActive) throw new ArgumentException($"Producto {item.ProductId} no disponible.");
+                products[item.ProductId] = product;
+            }
 
-            product.StockQuantity -= item.Quantity;
+            // Un mismo producto repetido en la orden se valida contra la cantidad total pedida
+            var requested = requestedByProduct.GetValueOrDefault(item.ProductId) + item.Quantity;
+            if (product.StockQuantity < requested) throw new InsufficientStockException(product.Name, product.StockQuantity, requested);
+            requestedByProduct[item.ProductId] = requested;
+        }
+
+        // 2) Con la orden validada se descuenta el stock y se arma la orden
+        foreach (var (productId, requested) in requestedByProduct)
+        {
+            var product = products[productId];
+            product.StockQuantity -= requested;
             await _repository.Update(product);
+        }
 
+        var orderItems = new List<OrderItem>();
+        decimal total = 0m;
+
+        foreach (var item in request.Items)
+        {
+            var product = products[item.ProductId];
             var orderItem = new OrderItem(Guid.Empty, product.Id, item.Quantity, product.CurrentUnitPrice);
             orderItem.Product = product; // Asignamos para tener el nombre en la respuesta inmediata
 
