@@ -115,7 +115,7 @@ Notes on the API contract these tests verify:
 - The paginated product response is `ProductModel.ResponsePagination(ProductItems, Total)`, serialized as `{ "productItems": [...], "total": N }`. The TP4 statement calls the total `totalItems`; the API field is `total`.
 - `GET /api/products` (anonymous) returns only active products; `GET /api/products/admin` (Admin only) includes inactive ones. Both return `204 No Content` when there are no results.
 - Duplicate SKUs return `409 Conflict`.
-- Search ignores case, but in SQLite `upper()` only converts ASCII letters, so search tests use ASCII terms. Accented terms with different casing match on SQL Server but not on SQLite.
+- Search ignores case. In SQLite `upper()` only converts ASCII letters, so the search tests use ASCII terms. Searching accented terms with different casing is not covered by this suite.
 
 ### E2E API flow
 
