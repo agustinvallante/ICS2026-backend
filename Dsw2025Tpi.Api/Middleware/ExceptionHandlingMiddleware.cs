@@ -90,6 +90,14 @@ namespace Dsw2025Tpi.Api.NewFolder
                     code = ErrorCodes.CheckoutFailed;
                     break;
 
+                // 500: falló el commit del checkout y la orden pudo haberse registrado; el mensaje
+                // pide revisar las órdenes antes de repetir la compra para no duplicarla
+                case CheckoutOutcomeUnknownException:
+                    status = HttpStatusCode.InternalServerError;
+                    message = exception.Message;
+                    code = ErrorCodes.CheckoutOutcomeUnknown;
+                    break;
+
                 // 409 Conflict: duplicado rechazado por un índice único de SQL Server (ej. altas concurrentes)
                 case DbUpdateException dbUpdateException when TryGetProductUniqueIndexMessage(dbUpdateException, out var conflictMessage):
                     status = HttpStatusCode.Conflict;

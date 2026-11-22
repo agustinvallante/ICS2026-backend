@@ -6,5 +6,6 @@ namespace Dsw2025Tpi.Api.Contract
         public const string InsufficientStock = "INSUFFICIENT_STOCK";
         public const string ConcurrencyConflict = "CONCURRENCY_CONFLICT";
         public const string CheckoutFailed = "CHECKOUT_FAILED";
+        public const string CheckoutOutcomeUnknown = "CHECKOUT_OUTCOME_UNKNOWN";
     }
 }

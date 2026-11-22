@@ -90,6 +90,38 @@ public class EfUnitOfWorkTests
         });
     }
 
+    // Revisión PR #19: si falla el COMMIT, los datos pueden haber quedado confirmados. Se informa como
+    // resultado incierto y no se reintenta, porque repetir la operación la duplicaría.
+    [Fact]
+    public async Task ExecuteInTransactionAsync_WhenCommitAcknowledgementIsLost_ReportsUnknownOutcomeWithoutRetrying()
+    {
+        using var factory = SeededFactory();
+        var attempts = 0;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<Dsw2025TpiContext>();
+            var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            factory.LoseNextCommitAcknowledgement = true;
+
+            var exception = await Assert.ThrowsAsync<TransactionOutcomeUnknownException>(() =>
+                unitOfWork.ExecuteInTransactionAsync(async () =>
+                {
+                    attempts++;
+                    await DecrementStockAndSave(db, factory.ProductId, 2);
+                    return "ok";
+                }));
+
+            Assert.IsType<InvalidOperationException>(exception.InnerException);
+            Assert.Empty(db.ChangeTracker.Entries());
+        }
+
+        Assert.Equal(1, attempts);
+        // La base sí confirmó el cambio: por eso el error no puede afirmar que se revirtió
+        factory.Inspect(db =>
+            Assert.Equal(3, db.Set<Product>().Single(p => p.Id == factory.ProductId).StockQuantity));
+    }
+
     [Fact]
     public async Task ExecuteInTransactionAsync_WhenEveryAttemptConflicts_RollsBackEachAttemptAndReportsConflict()
     {

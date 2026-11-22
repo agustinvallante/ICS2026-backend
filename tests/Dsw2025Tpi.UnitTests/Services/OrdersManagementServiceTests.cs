@@ -295,6 +295,27 @@ public class OrdersManagementServiceTests
         Assert.DoesNotContain("Simulated", exception.Message);
     }
 
+    // Revisión PR #19: un fallo del commit no se informa como rollback confirmado
+    [Fact]
+    public async Task CreateOrder_WhenCommitOutcomeIsUnknown_ThrowsCheckoutOutcomeUnknownInsteadOfCheckoutFailed()
+    {
+        // Arrange
+        var commitFailure = new TransactionOutcomeUnknownException(new Exception("Connection lost during commit"));
+        var unitOfWork = new Mock<IUnitOfWork>(MockBehavior.Strict);
+        unitOfWork.Setup(x => x.ExecuteInTransactionAsync(It.IsAny<Func<Task<OrderResponse>>>()))
+            .ThrowsAsync(commitFailure);
+        var service = CreateService(new Mock<IRepository>(MockBehavior.Strict), unitOfWork);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<CheckoutOutcomeUnknownException>(
+            () => service.CreateOrder(CreateRequest(Guid.NewGuid(), new OrderItemRequest(Guid.NewGuid(), 1))));
+
+        // Assert
+        Assert.Same(commitFailure, exception.InnerException);
+        Assert.Contains("Revisá tus órdenes", exception.Message);
+        Assert.DoesNotContain("No se registró", exception.Message);
+    }
+
     // Los conflictos de concurrencia no se ocultan detrás del error genérico de checkout
     [Fact]
     public async Task CreateOrder_WhenConcurrencyConflictPersists_PropagatesConflictUnchanged()

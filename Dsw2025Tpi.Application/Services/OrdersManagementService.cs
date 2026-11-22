@@ -131,9 +131,15 @@ public class OrdersManagementService
             // desde el principio, releyendo y revalidando el stock
             return await _unitOfWork.ExecuteInTransactionAsync(() => CreateOrderInTransaction(request));
         }
+        catch (TransactionOutcomeUnknownException ex)
+        {
+            // Falló el commit: la orden pudo haberse registrado, así que no se afirma un rollback
+            throw new CheckoutOutcomeUnknownException(ex);
+        }
         catch (Exception ex) when (!IsExpectedCheckoutError(ex))
         {
-            // La transacción ya se revirtió: se informa un error controlado sin exponer detalles de EF/SQL
+            // Falló antes del commit, así que la transacción nunca se confirmó: se informa un error
+            // controlado sin exponer detalles de EF/SQL
             throw new CheckoutFailedException(ex);
         }
     }

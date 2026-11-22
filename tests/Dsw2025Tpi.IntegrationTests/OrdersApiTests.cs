@@ -173,6 +173,32 @@ public class OrdersApiTests
         AssertUnchanged(factory);
     }
 
+    // EV-B02 CA4 (revisión PR #19): si falla el COMMIT la orden puede haber quedado registrada.
+    // La API no afirma un rollback: pide revisar las órdenes antes de repetir, y no reintenta.
+    [Fact]
+    public async Task CreateOrder_WhenCommitOutcomeIsUnknown_ReturnsSafeErrorWithoutDuplicatingTheOrder()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        factory.LoseNextCommitAcknowledgement = true;
+
+        using var response = await client.PostAsJsonAsync("/api/orders", Request(factory));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("CHECKOUT_OUTCOME_UNKNOWN", error.GetProperty("Code").GetString());
+        var message = error.GetProperty("Message").GetString();
+        Assert.Equal("No pudimos confirmar si tu compra se registró. Revisá tus órdenes antes de volver a intentarlo.", message);
+        Assert.DoesNotContain("Simulated", message);
+        factory.Inspect(db =>
+        {
+            // En esta simulación la base confirmó el commit: hay exactamente una orden, sin duplicados
+            var order = Assert.Single(db.Set<Order>().Include(o => o.OrderItems));
+            Assert.Single(order.OrderItems!);
+            Assert.Equal(3, db.Set<Product>().Single(p => p.Id == factory.ProductId).StockQuantity);
+        });
+    }
+
     [Fact]
     public async Task Orders_WithDifferentOwners_RestrictReadListAndCreation()
     {
