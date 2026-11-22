@@ -80,8 +80,10 @@ public class SqlServerPersistenceTests
         Assert.Equal(persistenceFailure ? HttpStatusCode.InternalServerError : HttpStatusCode.BadRequest, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.False(string.IsNullOrWhiteSpace(error.GetProperty("Message").GetString()));
+        Assert.Equal(persistenceFailure ? "CHECKOUT_FAILED" : "INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
         if (persistenceFailure)
-            Assert.Equal("Ocurrió un error inesperado en el servidor.", error.GetProperty("Message").GetString());
+            Assert.Equal("No se pudo completar la compra. No se registró la orden ni se descontó stock; podés intentarlo nuevamente.",
+                error.GetProperty("Message").GetString());
         factory.Inspect(db =>
         {
             Assert.Equal("Microsoft.EntityFrameworkCore.SqlServer", db.Database.ProviderName);

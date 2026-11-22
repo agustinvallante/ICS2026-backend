@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Net.Http.Headers;
 using Dsw2025Tpi.Api;
 using Dsw2025Tpi.Application.Services;
@@ -30,6 +31,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public Guid ProductId { get; } = Guid.NewGuid();
     public Guid OtherProductId { get; } = Guid.NewGuid();
     public bool FailOrderSave { get; set; }
+    // One-shot: the next transaction COMMIT is applied by the database but CommitAsync throws afterwards,
+    // simulating a connection lost while waiting for the commit acknowledgement (outcome unknown to the app).
+    public bool LoseNextCommitAcknowledgement { get; set; }
     // SQL Server only: runs before each SaveChanges that updates a Product, with the 1-based count of such
     // saves, so a test can hold requests or change the row from another context after it was read.
     public Func<int, Task>? BeforeProductUpdate { get; set; }
@@ -80,7 +84,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             if (_sqlConnectionString is not null)
             {
                 services.AddDbContext<Dsw2025TpiContext>(o => o.UseSqlServer(_sqlConnectionString)
-                    .AddInterceptors(new OrderFailureInterceptor(this), new ProductUpdateProbe(this)));
+                    .AddInterceptors(new OrderFailureInterceptor(this), new ProductUpdateProbe(this),
+                        new LostCommitAcknowledgementInterceptor(this)));
                 services.AddDbContext<AuthenticateContext>(o => o.UseSqlServer(_sqlConnectionString));
             }
             else
@@ -88,7 +93,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 // SQLite cannot generate rowversion values; simulate them on the client (test-only)
                 services.AddDbContext<Dsw2025TpiContext>(o => o.UseSqlite(_data)
                     .ReplaceService<IModelCustomizer, SqliteRowVersionModelCustomizer>()
-                    .AddInterceptors(new SqliteRowVersionInterceptor(), new OrderFailureInterceptor(this)));
+                    .AddInterceptors(new SqliteRowVersionInterceptor(), new OrderFailureInterceptor(this),
+                        new LostCommitAcknowledgementInterceptor(this)));
                 services.AddDbContext<AuthenticateContext>(o => o.UseSqlite(_auth));
             }
         });
@@ -161,6 +167,23 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                     .Any(e => e.State == EntityState.Added))
                 throw new DbUpdateException("Simulated order persistence failure; test-only detail.");
             return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
+    }
+
+    // Runs after the database applied the COMMIT and makes CommitAsync throw, so the data is persisted
+    // but the application only sees a failure: the "commit outcome unknown" case of EV-B02.
+    private sealed class LostCommitAcknowledgementInterceptor(ApiFactory factory) : DbTransactionInterceptor
+    {
+        public override Task TransactionCommittedAsync(
+            DbTransaction transaction, TransactionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (factory.LoseNextCommitAcknowledgement)
+            {
+                factory.LoseNextCommitAcknowledgement = false;
+                throw new InvalidOperationException("Simulated lost commit acknowledgement; test-only detail.");
+            }
+            return base.TransactionCommittedAsync(transaction, eventData, cancellationToken);
         }
     }
 

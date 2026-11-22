@@ -73,9 +73,28 @@ public class OrdersApiTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
         var message = error.GetProperty("Message").GetString();
         Assert.Contains("no tiene suficiente stock", message);
         Assert.Contains("Stock actual: 5, solicitado: 6", message);
+        AssertUnchanged(factory);
+    }
+
+    // Caso límite (revisión PR #19): cantidades repetidas cuya suma desborda int se rechazan
+    // como stock insuficiente, sin descontar stock ni guardar la orden
+    [Fact]
+    public async Task CreateOrder_WhenRepeatedQuantitiesWouldOverflowInt_ReturnsInsufficientStockWithoutChanges()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        var request = Request(factory, quantity: 3);
+        request.Items.Add(new OrderItemRequest(factory.ProductId, int.MaxValue));
+
+        using var response = await client.PostAsJsonAsync("/api/orders", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
         AssertUnchanged(factory);
     }
 
@@ -143,9 +162,41 @@ public class OrdersApiTests
 
         Assert.Equal(persistenceFailure ? HttpStatusCode.InternalServerError : HttpStatusCode.BadRequest, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        // EV-B02 CA4: error controlado con código estable y mensaje accionable, sin detalles internos
+        Assert.Equal(persistenceFailure ? "CHECKOUT_FAILED" : "INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
+        var message = error.GetProperty("Message").GetString();
         if (persistenceFailure)
-            Assert.Equal("Ocurrió un error inesperado en el servidor.", error.GetProperty("Message").GetString());
+        {
+            Assert.Equal("No se pudo completar la compra. No se registró la orden ni se descontó stock; podés intentarlo nuevamente.", message);
+            Assert.DoesNotContain("Simulated", message);
+        }
         AssertUnchanged(factory);
+    }
+
+    // EV-B02 CA4 (revisión PR #19): si falla el COMMIT la orden puede haber quedado registrada.
+    // La API no afirma un rollback: pide revisar las órdenes antes de repetir, y no reintenta.
+    [Fact]
+    public async Task CreateOrder_WhenCommitOutcomeIsUnknown_ReturnsSafeErrorWithoutDuplicatingTheOrder()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        factory.LoseNextCommitAcknowledgement = true;
+
+        using var response = await client.PostAsJsonAsync("/api/orders", Request(factory));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("CHECKOUT_OUTCOME_UNKNOWN", error.GetProperty("Code").GetString());
+        var message = error.GetProperty("Message").GetString();
+        Assert.Equal("No pudimos confirmar si tu compra se registró. Revisá tus órdenes antes de volver a intentarlo.", message);
+        Assert.DoesNotContain("Simulated", message);
+        factory.Inspect(db =>
+        {
+            // En esta simulación la base confirmó el commit: hay exactamente una orden, sin duplicados
+            var order = Assert.Single(db.Set<Order>().Include(o => o.OrderItems));
+            Assert.Single(order.OrderItems!);
+            Assert.Equal(3, db.Set<Product>().Single(p => p.Id == factory.ProductId).StockQuantity);
+        });
     }
 
     [Fact]
