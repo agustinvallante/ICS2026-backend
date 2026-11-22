@@ -20,7 +20,9 @@ public class OrdersApiTests
             [new OrderItemRequest(factory.ProductId, quantity)]);
 
     [Fact]
-    public async Task CreateOrder_WithValidItems_PersistsAssociationsTotalsAndStock()
+    // Escenario E2E a nivel de API elegido para el TP4: crea la orden por HTTP con un cliente
+    // autenticado, verifica la persistencia y el descuento de stock en SQLite y la vuelve a leer por su Location.
+    public async Task CreateOrder_WhenAuthenticatedWithValidData_ReturnsCreatedAndPersistsOrderAndStockInSqlite()
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateSeededClient();
@@ -58,8 +60,57 @@ public class OrdersApiTests
         Assert.Equal(2, saved.GetProperty("items").GetArrayLength());
     }
 
+    [Fact]
+    public async Task CreateOrder_WhenStockIsInsufficient_ReturnsBadRequestWithErrorMessage()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        // "Product one" tiene stock 5 en la base sembrada.
+        var request = Request(factory, quantity: 6);
+
+        using var response = await client.PostAsJsonAsync("/api/orders", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
+        var message = error.GetProperty("Message").GetString();
+        Assert.Contains("no tiene suficiente stock", message);
+        Assert.Contains("Stock actual: 5, solicitado: 6", message);
+        AssertUnchanged(factory);
+    }
+
+    // Caso límite (revisión PR #19): cantidades repetidas cuya suma desborda int se rechazan
+    // como stock insuficiente, sin descontar stock ni guardar la orden
+    [Fact]
+    public async Task CreateOrder_WhenRepeatedQuantitiesWouldOverflowInt_ReturnsInsufficientStockWithoutChanges()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        var request = Request(factory, quantity: 3);
+        request.Items.Add(new OrderItemRequest(factory.ProductId, int.MaxValue));
+
+        using var response = await client.PostAsJsonAsync("/api/orders", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
+        AssertUnchanged(factory);
+    }
+
+    [Fact]
+    public async Task CreateOrder_WhenUnauthenticated_ReturnsUnauthorized()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(role: null);
+
+        using var response = await client.PostAsJsonAsync("/api/orders", Request(factory));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        AssertUnchanged(factory);
+    }
+
     [Theory]
-    [InlineData("insufficient-stock", 400)]
     [InlineData("empty-items", 400)]
     [InlineData("zero-quantity", 400)]
     [InlineData("negative-quantity", 400)]
@@ -73,7 +124,6 @@ public class OrdersApiTests
         var request = Request(factory);
         switch (scenario)
         {
-            case "insufficient-stock": request.Items[0] = new(factory.ProductId, 6); break;
             case "empty-items": request.Items.Clear(); break;
             case "zero-quantity": request.Items[0] = new(factory.ProductId, 0); break;
             case "negative-quantity": request.Items[0] = new(factory.ProductId, -1); break;
@@ -112,9 +162,41 @@ public class OrdersApiTests
 
         Assert.Equal(persistenceFailure ? HttpStatusCode.InternalServerError : HttpStatusCode.BadRequest, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        // EV-B02 CA4: error controlado con código estable y mensaje accionable, sin detalles internos
+        Assert.Equal(persistenceFailure ? "CHECKOUT_FAILED" : "INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
+        var message = error.GetProperty("Message").GetString();
         if (persistenceFailure)
-            Assert.Equal("Ocurrió un error inesperado en el servidor.", error.GetProperty("Message").GetString());
+        {
+            Assert.Equal("No se pudo completar la compra. No se registró la orden ni se descontó stock; podés intentarlo nuevamente.", message);
+            Assert.DoesNotContain("Simulated", message);
+        }
         AssertUnchanged(factory);
+    }
+
+    // EV-B02 CA4 (revisión PR #19): si falla el COMMIT la orden puede haber quedado registrada.
+    // La API no afirma un rollback: pide revisar las órdenes antes de repetir, y no reintenta.
+    [Fact]
+    public async Task CreateOrder_WhenCommitOutcomeIsUnknown_ReturnsSafeErrorWithoutDuplicatingTheOrder()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        factory.LoseNextCommitAcknowledgement = true;
+
+        using var response = await client.PostAsJsonAsync("/api/orders", Request(factory));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("CHECKOUT_OUTCOME_UNKNOWN", error.GetProperty("Code").GetString());
+        var message = error.GetProperty("Message").GetString();
+        Assert.Equal("No pudimos confirmar si tu compra se registró. Revisá tus órdenes antes de volver a intentarlo.", message);
+        Assert.DoesNotContain("Simulated", message);
+        factory.Inspect(db =>
+        {
+            // En esta simulación la base confirmó el commit: hay exactamente una orden, sin duplicados
+            var order = Assert.Single(db.Set<Order>().Include(o => o.OrderItems));
+            Assert.Single(order.OrderItems!);
+            Assert.Equal(3, db.Set<Product>().Single(p => p.Id == factory.ProductId).StockQuantity);
+        });
     }
 
     [Fact]
@@ -125,38 +207,76 @@ public class OrdersApiTests
         using var created = await client.PostAsJsonAsync("/api/orders", Request(factory));
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var location = created.Headers.Location;
+        Assert.NotNull(location);
+        var createdOrder = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var orderId = createdOrder.GetProperty("orderId").GetGuid();
 
         Authenticate(client, factory, "USER", factory.OtherCustomerId);
+        var otherRequest = Request(factory) with { CustomerId = factory.OtherCustomerId };
+        using var otherCreated = await client.PostAsJsonAsync("/api/orders", otherRequest);
+        Assert.Equal(HttpStatusCode.Created, otherCreated.StatusCode);
+        var otherOrder = await otherCreated.Content.ReadFromJsonAsync<JsonElement>();
+        var otherOrderId = otherOrder.GetProperty("orderId").GetGuid();
+
         using var forbiddenRead = await client.GetAsync(location);
         Assert.Equal(HttpStatusCode.Forbidden, forbiddenRead.StatusCode);
+        var error = await forbiddenRead.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("No tienes permiso para acceder a este recurso.", error.GetProperty("Message").GetString());
+        Assert.False(error.TryGetProperty("orderId", out _));
+        Assert.False(error.TryGetProperty("items", out _));
+
         var list = await client.GetFromJsonAsync<JsonElement>("/api/orders");
-        Assert.Equal(0, list.GetProperty("total").GetInt32());
+        Assert.Equal(1, list.GetProperty("total").GetInt32());
+        Assert.Equal(otherOrderId, Assert.Single(list.GetProperty("items").EnumerateArray()).GetProperty("orderId").GetGuid());
         using var forbiddenCreate = await client.PostAsJsonAsync("/api/orders", Request(factory));
         Assert.Equal(HttpStatusCode.Forbidden, forbiddenCreate.StatusCode);
 
         Authenticate(client, factory, "User", factory.CustomerId);
-        list = await client.GetFromJsonAsync<JsonElement>("/api/orders");
+        list = await client.GetFromJsonAsync<JsonElement>($"/api/orders?customerId={factory.OtherCustomerId}");
         Assert.Equal(1, list.GetProperty("total").GetInt32());
-        Authenticate(client, factory, "Admin", factory.CustomerId);
+        Assert.Equal(orderId, Assert.Single(list.GetProperty("items").EnumerateArray()).GetProperty("orderId").GetGuid());
+
+        Authenticate(client, factory, "Admin", customerId: null);
         using var adminRead = await client.GetAsync(location);
         Assert.Equal(HttpStatusCode.OK, adminRead.StatusCode);
         list = await client.GetFromJsonAsync<JsonElement>("/api/orders");
-        Assert.Equal(1, list.GetProperty("total").GetInt32());
+        Assert.Equal(2, list.GetProperty("total").GetInt32());
+        var listedOrderIds = list.GetProperty("items").EnumerateArray().Select(order => order.GetProperty("orderId").GetGuid());
+        Assert.Equal(new[] { orderId, otherOrderId }.Order(), listedOrderIds.Order());
         using var adminCreate = await client.PostAsJsonAsync("/api/orders", Request(factory));
         Assert.Equal(HttpStatusCode.Forbidden, adminCreate.StatusCode);
-        factory.Inspect(db => Assert.Single(db.Set<Order>()));
+        factory.Inspect(db => Assert.Equal(2, db.Set<Order>().Count()));
     }
 
-    [Fact]
-    public async Task GetOrders_WithEmptyCustomerId_ReturnsForbidden()
+    [Theory]
+    [InlineData(null, HttpStatusCode.Unauthorized)]
+    [InlineData("Support", HttpStatusCode.Forbidden)]
+    public async Task ReadOrders_RequiresAnAuthorizedRole(string? role, HttpStatusCode expectedStatus)
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(role);
+
+        using var list = await client.GetAsync("/api/orders");
+        using var detail = await client.GetAsync($"/api/orders/{Guid.NewGuid()}");
+
+        Assert.Equal(expectedStatus, list.StatusCode);
+        Assert.Equal(expectedStatus, detail.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadOrders_WithoutValidCustomerIdClaim_ReturnsForbidden(bool useZeroGuid)
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateSeededClient();
-        Authenticate(client, factory, "User", Guid.Empty);
+        Authenticate(client, factory, "User", useZeroGuid ? Guid.Empty : null);
 
-        using var response = await client.GetAsync("/api/orders");
+        using var list = await client.GetAsync("/api/orders");
+        using var detail = await client.GetAsync($"/api/orders/{Guid.NewGuid()}");
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, list.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, detail.StatusCode);
     }
 
     [Theory]
@@ -200,11 +320,11 @@ public class OrdersApiTests
         Assert.Equal(2, db.Set<Product>().Single(p => p.Id == factory.OtherProductId).StockQuantity);
     });
 
-    private static void Authenticate(HttpClient client, ApiFactory factory, string role, Guid customerId)
+    private static void Authenticate(HttpClient client, ApiFactory factory, string role, Guid? customerId)
     {
         using var scope = factory.Services.CreateScope();
         var token = scope.ServiceProvider.GetRequiredService<JwtTokenService>()
-            .GenerateToken("test-user", role, customerId.ToString());
+            .GenerateToken("test-user", role, customerId?.ToString() ?? string.Empty);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 }

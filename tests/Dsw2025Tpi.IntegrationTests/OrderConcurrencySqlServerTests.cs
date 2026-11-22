@@ -189,6 +189,7 @@ public class OrderConcurrencySqlServerTests
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("CONCURRENCY_CONFLICT", error.GetProperty("Code").GetString());
         Assert.Equal("Los datos fueron modificados por otra operación. Intentá nuevamente.",
             error.GetProperty("Message").GetString());
         Assert.Equal(EfUnitOfWork.MaxAttempts, factory.ProductUpdateAttempts);

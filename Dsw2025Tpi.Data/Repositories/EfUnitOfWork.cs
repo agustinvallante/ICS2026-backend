@@ -32,8 +32,16 @@ public class EfUnitOfWork : IUnitOfWork
             try
             {
                 var result = await operation();
-                await transaction.CommitAsync();
+                await CommitAsync(transaction);
                 return result;
+            }
+            catch (TransactionOutcomeUnknownException)
+            {
+                // El COMMIT pudo haberse aplicado: no se hace rollback explícito ni se reintenta,
+                // porque repetir la operación podría duplicarla (ej. una segunda orden)
+                _context.ChangeTracker.Clear();
+                _logger.LogError("Falló el commit de la transacción; su resultado es incierto y no se reintenta.");
+                throw;
             }
             catch (Exception ex)
             {
@@ -67,6 +75,20 @@ public class EfUnitOfWork : IUnitOfWork
         }
 
         return false;
+    }
+
+    // Un error mientras se confirma no garantiza que la base haya descartado los cambios:
+    // se informa como resultado incierto, distinto de un fallo previo al commit
+    private static async Task CommitAsync(IDbContextTransaction transaction)
+    {
+        try
+        {
+            await transaction.CommitAsync();
+        }
+        catch (Exception commitException)
+        {
+            throw new TransactionOutcomeUnknownException(commitException);
+        }
     }
 
     private async Task RollbackAsync(IDbContextTransaction transaction)
