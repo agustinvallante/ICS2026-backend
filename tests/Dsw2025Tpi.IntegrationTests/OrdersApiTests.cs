@@ -20,7 +20,9 @@ public class OrdersApiTests
             [new OrderItemRequest(factory.ProductId, quantity)]);
 
     [Fact]
-    public async Task CreateOrder_WithValidItems_PersistsAssociationsTotalsAndStock()
+    // Escenario E2E a nivel de API elegido para el TP4: crea la orden por HTTP con un cliente
+    // autenticado, verifica la persistencia y el descuento de stock en SQLite y la vuelve a leer por su Location.
+    public async Task CreateOrder_WhenAuthenticatedWithValidData_ReturnsCreatedAndPersistsOrderAndStockInSqlite()
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateSeededClient();
@@ -58,8 +60,38 @@ public class OrdersApiTests
         Assert.Equal(2, saved.GetProperty("items").GetArrayLength());
     }
 
+    [Fact]
+    public async Task CreateOrder_WhenStockIsInsufficient_ReturnsBadRequestWithErrorMessage()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        // "Product one" tiene stock 5 en la base sembrada.
+        var request = Request(factory, quantity: 6);
+
+        using var response = await client.PostAsJsonAsync("/api/orders", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var message = error.GetProperty("Message").GetString();
+        Assert.Contains("no tiene suficiente stock", message);
+        Assert.Contains("Stock actual: 5, solicitado: 6", message);
+        AssertUnchanged(factory);
+    }
+
+    [Fact]
+    public async Task CreateOrder_WhenUnauthenticated_ReturnsUnauthorized()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(role: null);
+
+        using var response = await client.PostAsJsonAsync("/api/orders", Request(factory));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        AssertUnchanged(factory);
+    }
+
     [Theory]
-    [InlineData("insufficient-stock", 400)]
     [InlineData("empty-items", 400)]
     [InlineData("zero-quantity", 400)]
     [InlineData("negative-quantity", 400)]
@@ -73,7 +105,6 @@ public class OrdersApiTests
         var request = Request(factory);
         switch (scenario)
         {
-            case "insufficient-stock": request.Items[0] = new(factory.ProductId, 6); break;
             case "empty-items": request.Items.Clear(); break;
             case "zero-quantity": request.Items[0] = new(factory.ProductId, 0); break;
             case "negative-quantity": request.Items[0] = new(factory.ProductId, -1); break;

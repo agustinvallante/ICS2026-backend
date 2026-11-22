@@ -19,9 +19,6 @@ public class ApiAccessTests
     [InlineData(null, "GET", "/api/orders", 401)]
     [InlineData("User", "GET", "/api/orders", 200)]
     [InlineData("Admin", "GET", "/api/orders", 200)]
-    [InlineData(null, "POST", "/api/products", 401)]
-    [InlineData("User", "POST", "/api/products", 403)]
-    [InlineData("Admin", "POST", "/api/products", 201)]
     [InlineData(null, "PUT", "/api/orders/00000000-0000-0000-0000-000000000001/status", 401)]
     [InlineData("User", "PUT", "/api/orders/00000000-0000-0000-0000-000000000001/status", 403)]
     [InlineData("Admin", "PUT", "/api/orders/00000000-0000-0000-0000-000000000001/status", 404)]
@@ -31,12 +28,25 @@ public class ApiAccessTests
         using var factory = new ApiFactory();
         using var client = factory.CreateSeededClient(role);
         using var request = new HttpRequestMessage(new HttpMethod(method), path);
-        if (method == "POST") request.Content = JsonContent.Create(ProductRequestFactory.Create());
         if (method == "PUT") request.Content = JsonContent.Create("PROCESSING");
 
         using var response = await client.SendAsync(request);
 
         Assert.Equal((HttpStatusCode)expected, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null, 401)]
+    [InlineData("User", 403)]
+    public async Task AddProduct_WhenUnauthenticatedOrNotAdmin_ReturnsUnauthorizedOrForbidden(string? role, int expected)
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(role);
+
+        using var response = await client.PostAsJsonAsync("/api/products", ProductRequestFactory.Create(sku: "SKU-NEW"));
+
+        Assert.Equal((HttpStatusCode)expected, response.StatusCode);
+        factory.Inspect(db => Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count()));
     }
 
     [Theory]
@@ -106,24 +116,37 @@ public class ApiAccessTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    [Theory]
-    [InlineData(false, 400)]
-    [InlineData(true, 409)]
-    public async Task AddProduct_WithInvalidOrDuplicateData_ReturnsJsonError(bool duplicate, int expected)
+    [Fact]
+    public async Task AddProduct_WhenSkuAlreadyExistsInDatabase_ReturnsConflictStatusCode()
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateSeededClient("Admin");
-        var request = duplicate
-            ? ProductRequestFactory.Create(sku: "SKU-1")
-            : ProductRequestFactory.Create(currentUnitPrice: -1m);
 
-        using var response = await client.PostAsJsonAsync("/api/products", request);
+        // SKU-1 ya existe en la base sembrada por ApiFactory.
+        using var response = await client.PostAsJsonAsync("/api/products", ProductRequestFactory.Create(sku: "SKU-1"));
 
-        Assert.Equal((HttpStatusCode)expected, response.StatusCode);
+        await AssertJsonError(response, HttpStatusCode.Conflict);
+        factory.Inspect(db => Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count()));
+    }
+
+    [Fact]
+    public async Task AddProduct_WithInvalidData_ReturnsJsonError()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient("Admin");
+
+        using var response = await client.PostAsJsonAsync("/api/products", ProductRequestFactory.Create(currentUnitPrice: -1m));
+
+        await AssertJsonError(response, HttpStatusCode.BadRequest);
+        factory.Inspect(db => Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count()));
+    }
+
+    private static async Task AssertJsonError(HttpResponseMessage response, HttpStatusCode expected)
+    {
+        Assert.Equal(expected, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         var error = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.False(string.IsNullOrWhiteSpace(error.GetProperty("Message").GetString()));
-        factory.Inspect(db => Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count()));
     }
 
     [Theory]
