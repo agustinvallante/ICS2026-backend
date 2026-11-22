@@ -147,6 +147,9 @@ public class OrdersManagementService
         ConcurrencyConflictException or
         OperationCanceledException;
 
+    // Total pedido para el mensaje de error; se calcula en long para informarlo sin desbordar
+    private static long RequestedTotal(int alreadyRequested, int quantity) => (long)alreadyRequested + quantity;
+
     private async Task<OrderResponse> CreateOrderInTransaction(OrderRequest request)
     {
         var customer = await _repository.GetById<Customer>(request.CustomerId);
@@ -168,10 +171,14 @@ public class OrdersManagementService
                 products[item.ProductId] = product;
             }
 
-            // Un mismo producto repetido en la orden se valida contra la cantidad total pedida
-            var requested = requestedByProduct.GetValueOrDefault(item.ProductId) + item.Quantity;
-            if (product.StockQuantity < requested) throw new InsufficientStockException(product.Name, product.StockQuantity, requested);
-            requestedByProduct[item.ProductId] = requested;
+            // Un mismo producto repetido en la orden se valida contra el stock que queda después de los
+            // ítems anteriores. Se compara antes de sumar para que el acumulado nunca desborde int:
+            // si el ítem entra en el stock restante, el total queda acotado por StockQuantity
+            var alreadyRequested = requestedByProduct.GetValueOrDefault(item.ProductId);
+            var remainingStock = product.StockQuantity - alreadyRequested;
+            if (item.Quantity > remainingStock)
+                throw new InsufficientStockException(product.Name, product.StockQuantity, RequestedTotal(alreadyRequested, item.Quantity));
+            requestedByProduct[item.ProductId] = alreadyRequested + item.Quantity;
         }
 
         // 2) Con la orden validada se descuenta el stock y se arma la orden

@@ -80,6 +80,24 @@ public class OrdersApiTests
         AssertUnchanged(factory);
     }
 
+    // Caso límite (revisión PR #19): cantidades repetidas cuya suma desborda int se rechazan
+    // como stock insuficiente, sin descontar stock ni guardar la orden
+    [Fact]
+    public async Task CreateOrder_WhenRepeatedQuantitiesWouldOverflowInt_ReturnsInsufficientStockWithoutChanges()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        var request = Request(factory, quantity: 3);
+        request.Items.Add(new OrderItemRequest(factory.ProductId, int.MaxValue));
+
+        using var response = await client.PostAsJsonAsync("/api/orders", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("INSUFFICIENT_STOCK", error.GetProperty("Code").GetString());
+        AssertUnchanged(factory);
+    }
+
     [Fact]
     public async Task CreateOrder_WhenUnauthenticated_ReturnsUnauthorized()
     {

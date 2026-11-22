@@ -205,6 +205,35 @@ public class OrdersManagementServiceTests
         repository.Verify(x => x.Add(It.IsAny<Order>()), Times.Never());
     }
 
+    // Caso límite (revisión PR #19): 3 + int.MaxValue desborda int y, sumado sin control, daría un
+    // total negativo que pasaría la validación y aumentaría el stock. Debe rechazarse sin escribir nada.
+    [Fact]
+    public async Task CreateOrder_WhenRepeatedQuantitiesWouldOverflowInt_ThrowsWithoutUpdatingStock()
+    {
+        // Arrange
+        var customer = new Customer { Name = "Test customer" };
+        var product = new Product("SKU-01", "Test product", 10m, 5, null, "CODE-01");
+        var request = CreateRequest(
+            customer.Id,
+            new OrderItemRequest(product.Id, 3),
+            new OrderItemRequest(product.Id, int.MaxValue));
+        var repository = new Mock<IRepository>(MockBehavior.Strict);
+        repository.Setup(x => x.GetById<Customer>(customer.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(customer);
+        repository.Setup(x => x.GetById<Product>(product.Id, It.IsAny<string[]>()))
+            .ReturnsAsync(product);
+        var service = CreateService(repository);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<InsufficientStockException>(() => service.CreateOrder(request));
+
+        // Assert
+        Assert.Contains($"Stock actual: 5, solicitado: {3L + int.MaxValue}", exception.Message);
+        Assert.Equal(5, product.StockQuantity);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+        repository.Verify(x => x.Add(It.IsAny<Order>()), Times.Never());
+    }
+
     [Fact]
     public async Task CreateOrder_WhenRepeatedProductFitsStock_DecrementsTheTotalOnce()
     {
