@@ -1,18 +1,17 @@
-
-name: Build and Deploy to Azure App Service
+name: TP4-04 - Evidencia de bloqueo
+run-name: TP4-04 - ${{ inputs.fail_test && 'fallo controlado' || 'control verde' }}
 
 on:
-  push:
-    branches: [development, main]
-  pull_request:
-    branches: [development, main]
   workflow_dispatch:
+    inputs:
+      fail_test:
+        description: Hacer fallar la prueba de evidencia
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
-
-env:
-  IMAGE_NAME: ics-backend
 
 jobs:
   run-tests:
@@ -50,56 +49,14 @@ jobs:
 
       - name: Run automated tests
         env:
+          TP4_QA_FORCE_FAILURE: ${{ inputs.fail_test && 'true' || 'false' }}
           QA_SQLSERVER_CONNECTION_STRING: "Server=localhost,1433;User Id=sa;Password=Test_Password123!;TrustServerCertificate=True;"
         run: dotnet test Dsw2025Tpi.sln --configuration Release --no-build --verbosity normal
-  docker-build-check:
-    name: Validate Docker Build (No Push)
-    runs-on: ubuntu-latest
-    needs: run-tests
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/development')
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build Docker image (validation only)
-        run: docker build -t "$IMAGE_NAME:ci" -f Dockerfile .
-
   build-and-deploy:
+    name: Deploy simulado (sin publicacion)
     runs-on: ubuntu-latest
     needs: run-tests
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/test/tp4-04-evidencia-quality-gate'
     steps:
-      # 1. Obtener el código
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 5. Construir la imagen Docker
-      - name: Build Docker image
-        run: docker build -t "$IMAGE_NAME:ci" -f Dockerfile .
-
-      # 6. Iniciar sesión en Docker Hub
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # 7. Publicar la imagen
-      - name: Push Docker image
-        env:
-          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: |
-          docker tag "$IMAGE_NAME:ci" "$HUB_USER/$IMAGE_NAME:$GITHUB_SHA"
-          docker tag "$IMAGE_NAME:ci" "$HUB_USER/$IMAGE_NAME:latest"
-
-          docker push "$HUB_USER/$IMAGE_NAME:$GITHUB_SHA"
-          docker push "$HUB_USER/$IMAGE_NAME:latest"
-
-      # 8. Desplegar en Azure
-      - name: Deploy to Azure App Service
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ secrets.APP_SERVICE_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Confirmar que el Quality Gate habilita el deploy
+        run: echo "Deploy simulado. No se publico ninguna imagen ni se contacto a Azure."
