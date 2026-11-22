@@ -10,6 +10,9 @@ namespace Dsw2025Tpi.Api.Controllers;
 [Route("api/orders")]
 public class OrdersController : ControllerBase
 {
+    private const string CustomerRoles = "User,USER";
+    private const string OrderReadRoles = "Admin," + CustomerRoles;
+
     private Guid CurrentCustomerId()
     {
         if (!Guid.TryParse(User.FindFirst("customerId")?.Value, out var customerId) || customerId == Guid.Empty)
@@ -27,7 +30,7 @@ public class OrdersController : ControllerBase
     }
 
     [HttpPost]
-    [Authorize(Roles = "User,USER")]
+    [Authorize(Roles = CustomerRoles)]
     public async Task<IActionResult> CreateOrder([FromBody] OrderRequest request)
     {
         _logger.LogInformation("Recibida solicitud POST /api/orders para crear una nueva orden.");
@@ -36,7 +39,8 @@ public class OrdersController : ControllerBase
         return CreatedAtAction(nameof(GetOrderById), new { id = created.OrderId }, created);
     }
 
-        [HttpGet]
+    [HttpGet]
+    [Authorize(Roles = OrderReadRoles)]
     public async Task<IActionResult> GetOrders([FromQuery] OrderFilter filter)
     {
         _logger.LogInformation("Recibida solicitud GET /api/orders con filtros.");
@@ -48,6 +52,7 @@ public class OrdersController : ControllerBase
     }
 
     [HttpGet("{id}")]
+    [Authorize(Roles = OrderReadRoles)]
     public async Task<IActionResult> GetOrderById(Guid id)
     {
         _logger.LogInformation("Recibida solicitud GET /api/orders/{OrderId}", id);

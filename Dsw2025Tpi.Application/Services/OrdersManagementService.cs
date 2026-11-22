@@ -21,7 +21,7 @@ public class OrdersManagementService
     }
 
     // --- GET ORDERS (CORREGIDO PARA PAGINACIÓN) ---
-    public async Task<OrderResponsePagination> GetOrders(OrderFilter filter, Guid? customerId = null)
+    public async Task<OrderResponsePagination> GetOrders(OrderFilter filter, Guid? customerId)
     {
         _logger.LogInformation("Obteniendo órdenes con filtros: {@Filter}", filter);
 
@@ -86,7 +86,7 @@ public class OrdersManagementService
     }
 
     // --- GET BY ID ---
-    public async Task<OrderResponse> GetOrderById(Guid id, Guid? customerId = null)
+    public async Task<OrderResponse> GetOrderById(Guid id, Guid? customerId)
     {
         _logger.LogInformation("Buscando orden con ID: {OrderID}", id);
         var order = await _repository.GetById<Order>(id, "OrderItems.Product", "Customer");
