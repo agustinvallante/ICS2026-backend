@@ -156,38 +156,76 @@ public class OrdersApiTests
         using var created = await client.PostAsJsonAsync("/api/orders", Request(factory));
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var location = created.Headers.Location;
+        Assert.NotNull(location);
+        var createdOrder = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var orderId = createdOrder.GetProperty("orderId").GetGuid();
 
         Authenticate(client, factory, "USER", factory.OtherCustomerId);
+        var otherRequest = Request(factory) with { CustomerId = factory.OtherCustomerId };
+        using var otherCreated = await client.PostAsJsonAsync("/api/orders", otherRequest);
+        Assert.Equal(HttpStatusCode.Created, otherCreated.StatusCode);
+        var otherOrder = await otherCreated.Content.ReadFromJsonAsync<JsonElement>();
+        var otherOrderId = otherOrder.GetProperty("orderId").GetGuid();
+
         using var forbiddenRead = await client.GetAsync(location);
         Assert.Equal(HttpStatusCode.Forbidden, forbiddenRead.StatusCode);
+        var error = await forbiddenRead.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("No tienes permiso para acceder a este recurso.", error.GetProperty("Message").GetString());
+        Assert.False(error.TryGetProperty("orderId", out _));
+        Assert.False(error.TryGetProperty("items", out _));
+
         var list = await client.GetFromJsonAsync<JsonElement>("/api/orders");
-        Assert.Equal(0, list.GetProperty("total").GetInt32());
+        Assert.Equal(1, list.GetProperty("total").GetInt32());
+        Assert.Equal(otherOrderId, Assert.Single(list.GetProperty("items").EnumerateArray()).GetProperty("orderId").GetGuid());
         using var forbiddenCreate = await client.PostAsJsonAsync("/api/orders", Request(factory));
         Assert.Equal(HttpStatusCode.Forbidden, forbiddenCreate.StatusCode);
 
         Authenticate(client, factory, "User", factory.CustomerId);
-        list = await client.GetFromJsonAsync<JsonElement>("/api/orders");
+        list = await client.GetFromJsonAsync<JsonElement>($"/api/orders?customerId={factory.OtherCustomerId}");
         Assert.Equal(1, list.GetProperty("total").GetInt32());
-        Authenticate(client, factory, "Admin", factory.CustomerId);
+        Assert.Equal(orderId, Assert.Single(list.GetProperty("items").EnumerateArray()).GetProperty("orderId").GetGuid());
+
+        Authenticate(client, factory, "Admin", customerId: null);
         using var adminRead = await client.GetAsync(location);
         Assert.Equal(HttpStatusCode.OK, adminRead.StatusCode);
         list = await client.GetFromJsonAsync<JsonElement>("/api/orders");
-        Assert.Equal(1, list.GetProperty("total").GetInt32());
+        Assert.Equal(2, list.GetProperty("total").GetInt32());
+        var listedOrderIds = list.GetProperty("items").EnumerateArray().Select(order => order.GetProperty("orderId").GetGuid());
+        Assert.Equal(new[] { orderId, otherOrderId }.Order(), listedOrderIds.Order());
         using var adminCreate = await client.PostAsJsonAsync("/api/orders", Request(factory));
         Assert.Equal(HttpStatusCode.Forbidden, adminCreate.StatusCode);
-        factory.Inspect(db => Assert.Single(db.Set<Order>()));
+        factory.Inspect(db => Assert.Equal(2, db.Set<Order>().Count()));
     }
 
-    [Fact]
-    public async Task GetOrders_WithEmptyCustomerId_ReturnsForbidden()
+    [Theory]
+    [InlineData(null, HttpStatusCode.Unauthorized)]
+    [InlineData("Support", HttpStatusCode.Forbidden)]
+    public async Task ReadOrders_RequiresAnAuthorizedRole(string? role, HttpStatusCode expectedStatus)
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(role);
+
+        using var list = await client.GetAsync("/api/orders");
+        using var detail = await client.GetAsync($"/api/orders/{Guid.NewGuid()}");
+
+        Assert.Equal(expectedStatus, list.StatusCode);
+        Assert.Equal(expectedStatus, detail.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadOrders_WithoutValidCustomerIdClaim_ReturnsForbidden(bool useZeroGuid)
     {
         using var factory = new ApiFactory();
         using var client = factory.CreateSeededClient();
-        Authenticate(client, factory, "User", Guid.Empty);
+        Authenticate(client, factory, "User", useZeroGuid ? Guid.Empty : null);
 
-        using var response = await client.GetAsync("/api/orders");
+        using var list = await client.GetAsync("/api/orders");
+        using var detail = await client.GetAsync($"/api/orders/{Guid.NewGuid()}");
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, list.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, detail.StatusCode);
     }
 
     [Theory]
@@ -231,11 +269,11 @@ public class OrdersApiTests
         Assert.Equal(2, db.Set<Product>().Single(p => p.Id == factory.OtherProductId).StockQuantity);
     });
 
-    private static void Authenticate(HttpClient client, ApiFactory factory, string role, Guid customerId)
+    private static void Authenticate(HttpClient client, ApiFactory factory, string role, Guid? customerId)
     {
         using var scope = factory.Services.CreateScope();
         var token = scope.ServiceProvider.GetRequiredService<JwtTokenService>()
-            .GenerateToken("test-user", role, customerId.ToString());
+            .GenerateToken("test-user", role, customerId?.ToString() ?? string.Empty);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 }
