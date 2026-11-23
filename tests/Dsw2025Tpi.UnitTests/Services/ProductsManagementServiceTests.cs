@@ -1,0 +1,465 @@
+using System.Linq.Expressions;
+using Dsw2025Tpi.Application.Dtos;
+using Dsw2025Tpi.Application.Services;
+using Dsw2025Tpi.Domain.Entities;
+using Dsw2025Tpi.Domain.Interfaces;
+using Dsw2025Tpi.Tests.Shared;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using Xunit;
+
+namespace Dsw2025Tpi.UnitTests.Services;
+
+public class ProductsManagementServiceTests
+{
+    private const string InvalidUnitPriceMessage = "El precio unitario debe ser mayor a cero.";
+    private const string InvalidStockQuantityMessage = "La cantidad de stock no puede ser negativa.";
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [Trait("Category", "Unit")]
+    public async Task AddProduct_WithBlankSku_ThrowsInvalidDataException(string? sku)
+    {
+        var repository = CreateRepository();
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.AddProduct(ProductRequestFactory.Create(sku: sku)));
+
+        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [Trait("Category", "Unit")]
+    public async Task AddProduct_WithBlankName_ThrowsInvalidDataException(string? name)
+    {
+        var repository = CreateRepository();
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.AddProduct(ProductRequestFactory.Create(name: name)));
+
+        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Theory]
+    [InlineData(-0.01, 5, InvalidUnitPriceMessage)]
+    [InlineData(-1, 5, InvalidUnitPriceMessage)]
+    [InlineData(0, 5, InvalidUnitPriceMessage)]
+    [InlineData(12.50, -1, InvalidStockQuantityMessage)]
+    [InlineData(12.50, -5, InvalidStockQuantityMessage)]
+    [Trait("Category", "Unit")]
+    public async Task AddProduct_WithInvalidStockOrPrice_ThrowsInvalidDataException(
+        decimal price, int stock, string expectedMessage)
+    {
+        var repository = CreateRepository();
+        var service = CreateService(repository);
+        var request = ProductRequestFactory.Create(currentUnitPrice: price, stockQuantity: stock);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => service.AddProduct(request));
+
+        Assert.Equal(expectedMessage, exception.Message);
+        repository.Verify(
+            x => x.First<Product>(It.IsAny<Expression<Func<Product, bool>>>(), It.IsAny<string[]>()),
+            Times.Never());
+        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AddProduct_WithZeroStock_AddsProductAndReturnsZeroStock()
+    {
+        var repository = CreateRepository();
+        Product? addedProduct = null;
+        repository.Setup(x => x.Add(It.IsAny<Product>()))
+            .Callback<Product>(product => addedProduct = product)
+            .Returns((Product product) => Task.FromResult(product));
+        var service = CreateService(repository);
+
+        var response = await service.AddProduct(ProductRequestFactory.Create(stockQuantity: 0));
+
+        var savedProduct = Assert.IsType<Product>(addedProduct);
+        Assert.Equal(0, savedProduct.StockQuantity);
+        Assert.Equal(0, response.StockQuantity);
+        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Once());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AddProduct_WithDuplicateSku_ThrowsDuplicatedEntityException()
+    {
+        var existing = CreateProduct(sku: "SKU-001");
+        var repository = CreateRepository(existing);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<Dsw2025Tpi.Application.Exceptions.DuplicatedEntityException>(() =>
+            service.AddProduct(ProductRequestFactory.Create()));
+
+        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AddProduct_WithValidData_ReturnsProductAndCallsRepositoryAdd()
+    {
+        var repository = CreateRepository();
+        var request = ProductRequestFactory.Create(
+            sku: "SKU-NEW",
+            internalCode: "PRD-NEW",
+            name: "New product",
+            description: "Description",
+            currentUnitPrice: 21.75m,
+            stockQuantity: 8);
+        Product? addedProduct = null;
+        repository.Setup(x => x.Add(It.IsAny<Product>()))
+            .Callback<Product>(product => addedProduct = product)
+            .Returns((Product product) => Task.FromResult(product));
+        var service = CreateService(repository);
+
+        var response = await service.AddProduct(request);
+
+        var savedProduct = Assert.IsType<Product>(addedProduct);
+        Assert.Equal(savedProduct.Id, response.Id);
+        Assert.Equal(request.Sku, savedProduct.Sku);
+        Assert.Equal(request.InternalCode, savedProduct.InternalCode);
+        Assert.Equal(request.Name, savedProduct.Name);
+        Assert.Equal(request.Description, savedProduct.Description);
+        Assert.Equal(request.CurrentUnitPrice, savedProduct.CurrentUnitPrice);
+        Assert.Equal(request.StockQuantity, savedProduct.StockQuantity);
+        Assert.True(savedProduct.IsActive);
+        Assert.Equal(savedProduct.Sku, response.Sku);
+        Assert.Equal(savedProduct.InternalCode, response.InternalCode);
+        Assert.Equal(savedProduct.Name, response.Name);
+        Assert.Equal(savedProduct.Description, response.Description);
+        Assert.Equal(savedProduct.CurrentUnitPrice, response.CurrentUnitPrice);
+        Assert.Equal(savedProduct.StockQuantity, response.StockQuantity);
+        Assert.True(response.IsActive);
+        repository.Verify(x => x.Add(It.IsAny<Product>()), Times.Once());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithMissingId_ThrowsKeyNotFoundExceptionWithoutWriting()
+    {
+        var repository = CreateRepository();
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            service.UpdateProduct(Guid.NewGuid(), ProductRequestFactory.Create()));
+
+        repository.Verify(x => x.First<Product>(It.IsAny<Expression<Func<Product, bool>>>(), It.IsAny<string[]>()), Times.Never());
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithInactiveProduct_ThrowsKeyNotFoundExceptionWithoutWriting()
+    {
+        var inactiveProduct = CreateProduct(isActive: false);
+        var repository = CreateRepository(inactiveProduct);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            service.UpdateProduct(inactiveProduct.Id, ProductRequestFactory.Create()));
+
+        repository.Verify(x => x.First<Product>(It.IsAny<Expression<Func<Product, bool>>>(), It.IsAny<string[]>()), Times.Never());
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithBlankSku_ThrowsInvalidDataExceptionWithoutMutation(string? sku)
+    {
+        var product = CreateProduct();
+        var originalSku = product.Sku;
+        var repository = CreateRepository(product);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.UpdateProduct(product.Id, ProductRequestFactory.Create(sku: sku)));
+
+        Assert.Equal(originalSku, product.Sku);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithBlankName_ThrowsInvalidDataExceptionWithoutMutation(string? name)
+    {
+        var product = CreateProduct();
+        var originalName = product.Name;
+        var repository = CreateRepository(product);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.UpdateProduct(product.Id, ProductRequestFactory.Create(name: name)));
+
+        Assert.Equal(originalName, product.Name);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Theory]
+    [InlineData(-0.01)]
+    [InlineData(-1)]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithNegativePrice_ThrowsInvalidDataExceptionWithoutMutation(decimal price)
+    {
+        var product = CreateProduct();
+        var originalPrice = product.CurrentUnitPrice;
+        var repository = CreateRepository(product);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.UpdateProduct(product.Id, ProductRequestFactory.Create(currentUnitPrice: price)));
+
+        Assert.Equal(originalPrice, product.CurrentUnitPrice);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithZeroPrice_ThrowsInvalidDataExceptionWithoutMutation()
+    {
+        var product = CreateProduct();
+        var originalPrice = product.CurrentUnitPrice;
+        var repository = CreateRepository(product);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.UpdateProduct(product.Id, ProductRequestFactory.Create(currentUnitPrice: 0m)));
+
+        Assert.Equal(originalPrice, product.CurrentUnitPrice);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(-5)]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithNegativeStock_ThrowsInvalidDataExceptionWithoutMutation(int stock)
+    {
+        var product = CreateProduct();
+        var originalStock = product.StockQuantity;
+        var repository = CreateRepository(product);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.UpdateProduct(product.Id, ProductRequestFactory.Create(stockQuantity: stock)));
+
+        Assert.Equal(originalStock, product.StockQuantity);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithZeroStock_UpdatesProductAndReturnsZeroStock()
+    {
+        var product = CreateProduct();
+        var repository = CreateRepository(product);
+        var service = CreateService(repository);
+
+        var response = await service.UpdateProduct(
+            product.Id,
+            ProductRequestFactory.Create(stockQuantity: 0));
+
+        Assert.Equal(0, product.StockQuantity);
+        Assert.Equal(0, response.StockQuantity);
+        repository.Verify(x => x.Update(product), Times.Once());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithDuplicateSkuOwnedByAnotherProduct_ThrowsWithoutMutation()
+    {
+        var product = CreateProduct(sku: "SKU-OWN");
+        var otherProduct = CreateProduct(sku: "SKU-OTHER");
+        var originalName = product.Name;
+        var repository = CreateRepository(product, otherProduct);
+        var service = CreateService(repository);
+
+        await Assert.ThrowsAsync<Dsw2025Tpi.Application.Exceptions.DuplicatedEntityException>(() =>
+            service.UpdateProduct(
+                product.Id,
+                ProductRequestFactory.Create(sku: otherProduct.Sku)));
+
+        Assert.Equal("SKU-OWN", product.Sku);
+        Assert.Equal(originalName, product.Name);
+        repository.Verify(x => x.Update(It.IsAny<Product>()), Times.Never());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithItsOwnSku_UpdatesProduct()
+    {
+        var product = CreateProduct(sku: "SKU-OWN");
+        var repository = CreateRepository(product);
+        var request = ProductRequestFactory.Create(
+            sku: product.Sku,
+            internalCode: "PRD-UPDATED",
+            name: "Updated product",
+            description: "Updated description",
+            currentUnitPrice: 18.25m,
+            stockQuantity: 11);
+        var service = CreateService(repository);
+
+        var response = await service.UpdateProduct(product.Id, request);
+
+        Assert.Equal(product.Id, response.Id);
+        Assert.Equal("SKU-OWN", product.Sku);
+        Assert.Equal(request.InternalCode, product.InternalCode);
+        Assert.Equal(request.Name, product.Name);
+        Assert.Equal(request.Description, product.Description);
+        Assert.Equal(request.CurrentUnitPrice, product.CurrentUnitPrice);
+        Assert.Equal(request.StockQuantity, product.StockQuantity);
+        Assert.Equal(request.Sku, response.Sku);
+        Assert.Equal(request.InternalCode, response.InternalCode);
+        Assert.Equal(request.Name, response.Name);
+        Assert.Equal(request.Description, response.Description);
+        Assert.Equal(request.CurrentUnitPrice, response.CurrentUnitPrice);
+        Assert.Equal(request.StockQuantity, response.StockQuantity);
+        Assert.Equal(product.IsActive, response.IsActive);
+        repository.Verify(x => x.Update(product), Times.Once());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UpdateProduct_WithAvailableSku_UpdatesProduct()
+    {
+        var product = CreateProduct(sku: "SKU-OWN");
+        var otherProduct = CreateProduct(sku: "SKU-OTHER");
+        var repository = CreateRepository(product, otherProduct);
+        var request = ProductRequestFactory.Create(sku: "SKU-FREE", name: "Renamed product");
+        var service = CreateService(repository);
+
+        var response = await service.UpdateProduct(product.Id, request);
+
+        Assert.Equal("SKU-FREE", product.Sku);
+        Assert.Equal("Renamed product", product.Name);
+        Assert.Equal("SKU-FREE", response.Sku);
+        Assert.Equal("Renamed product", response.Name);
+        repository.Verify(x => x.Update(product), Times.Once());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetProducts_WhenIncludeInactiveIsFalse_ReturnsOnlyActiveProducts()
+    {
+        // Arrange
+        var first = CreateProduct(sku: "SKU-A", name: "Active A");
+        var second = CreateProduct(sku: "SKU-B", name: "Active B");
+        var inactive = CreateProduct(sku: "SKU-C", name: "Inactive C", isActive: false);
+        var repository = CreateRepository(inactive, second, first);
+        var service = CreateService(repository);
+        var filter = new ProductModel.FilterProduct(Status: null, Search: null, PageNumber: 1, PageSize: 10);
+
+        // Act
+        var response = await service.GetProducts(filter, includeInactive: false);
+
+        // Assert
+        Assert.Equal(new[] { first.Id, second.Id }, response.ProductItems.Select(product => product.Id));
+        Assert.All(response.ProductItems, product => Assert.True(product.IsActive));
+        Assert.Equal(2, response.Total);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetProducts_WithPaginationFilter_AppliesSkipAndTakeCorrectly()
+    {
+        // Arrange
+        var products = Enumerable.Range(1, 15)
+            .Reverse()
+            .Select(index => CreateProduct(sku: $"SKU-{index:D2}", name: $"Product {index:D2}"))
+            .ToArray();
+        var repository = CreateRepository(products);
+        var service = CreateService(repository);
+        var filter = new ProductModel.FilterProduct(Status: null, Search: null, PageNumber: 2, PageSize: 5);
+
+        // Act
+        var response = await service.GetProducts(filter);
+
+        // Assert
+        Assert.Equal(
+            new[] { "SKU-06", "SKU-07", "SKU-08", "SKU-09", "SKU-10" },
+            response.ProductItems.Select(product => product.Sku));
+        Assert.Equal(15, response.Total);
+    }
+
+    [Theory]
+    [InlineData("Mouse")]
+    [InlineData("mOuSe")]
+    [Trait("Category", "Unit")]
+    public async Task GetProducts_WithSearchTerm_FiltersByNameSkuOrInternalCode(string searchTerm)
+    {
+        // Arrange
+        var matchesName = CreateProduct(sku: "SKU-01", name: "Gaming Mouse XL", internalCode: "CODE-01");
+        var matchesSku = CreateProduct(sku: "SKU-Mouse-02", name: "Keyboard", internalCode: "CODE-02");
+        var matchesInternalCode = CreateProduct(sku: "SKU-03", name: "Stand", internalCode: "CODE-Mouse-03");
+        var unrelated = CreateProduct(sku: "SKU-04", name: "Monitor", internalCode: "CODE-04");
+        var repository = CreateRepository(unrelated, matchesInternalCode, matchesSku, matchesName);
+        var service = CreateService(repository);
+        var filter = new ProductModel.FilterProduct(Status: null, Search: searchTerm, PageNumber: 1, PageSize: 10);
+
+        // Act
+        var response = await service.GetProducts(filter);
+
+        // Assert
+        Assert.Equal(
+            new[] { matchesName.Id, matchesSku.Id, matchesInternalCode.Id },
+            response.ProductItems.Select(product => product.Id));
+        Assert.Equal(3, response.Total);
+    }
+
+    private static ProductsManagementService CreateService(Mock<IRepository> repository)
+    {
+        return new ProductsManagementService(
+            repository.Object,
+            NullLogger<ProductsManagementService>.Instance);
+    }
+
+    private static Mock<IRepository> CreateRepository(params Product[] products)
+    {
+        var repository = new Mock<IRepository>();
+        repository.Setup(x => x.GetById<Product>(It.IsAny<Guid>(), It.IsAny<string[]>()))
+            .Returns((Guid id, string[] _) => Task.FromResult<Product?>(products.FirstOrDefault(product => product.Id == id)));
+        repository.Setup(x => x.First<Product>(It.IsAny<Expression<Func<Product, bool>>>(), It.IsAny<string[]>()))
+            .Returns((Expression<Func<Product, bool>> predicate, string[] _) =>
+                Task.FromResult(products.AsQueryable().FirstOrDefault(predicate)));
+        repository.Setup(x => x.GetFiltered<Product>(It.IsAny<Expression<Func<Product, bool>>>(), It.IsAny<string[]>()))
+            .Returns((Expression<Func<Product, bool>> predicate, string[] _) =>
+                Task.FromResult<IEnumerable<Product>>(products.AsQueryable().Where(predicate).ToList()));
+        repository.Setup(x => x.Add(It.IsAny<Product>()))
+            .Returns((Product product) => Task.FromResult(product));
+        repository.Setup(x => x.Update(It.IsAny<Product>()))
+            .Returns((Product product) => Task.FromResult(product));
+        return repository;
+    }
+
+    private static Product CreateProduct(
+        string sku = "SKU-EXISTING",
+        bool isActive = true,
+        string name = "Existing product",
+        string internalCode = "PRD-EXISTING")
+    {
+        return new Product(
+            sku,
+            name,
+            9.99m,
+            4,
+            "Existing description",
+            internalCode)
+        {
+            IsActive = isActive
+        };
+    }
+}

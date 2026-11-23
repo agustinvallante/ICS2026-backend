@@ -1,8 +1,15 @@
 **/bin/
 **/obj/
+**/.vs/
+**/Logs/
 **/*.user
 **/*.suo
 **/.DS_Store
+**/admins.json
+.env
+.env.*
+**/.env
+**/.env.*
 .git
 .gitignore
 Dockerfile

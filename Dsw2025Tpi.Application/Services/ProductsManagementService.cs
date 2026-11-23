@@ -10,6 +10,9 @@ namespace Dsw2025Tpi.Application.Services
 {
     public class ProductsManagementService
     {
+        private const string InvalidUnitPriceMessage = "El precio unitario debe ser mayor a cero.";
+        private const string InvalidStockQuantityMessage = "La cantidad de stock no puede ser negativa.";
+
         private readonly IRepository _repository;
         private readonly ILogger<ProductsManagementService> _logger;
         public ProductsManagementService(IRepository repository, ILogger<ProductsManagementService> logger)
@@ -27,15 +30,15 @@ namespace Dsw2025Tpi.Application.Services
                 _logger.LogError("Intento de crear producto sin nombre o sku");
                 throw new InvalidDataException("El sku y el nombre son requerido");
             }
-            if (request.CurrentUnitPrice < 0)
+            if (request.CurrentUnitPrice <= 0)
             {
-                _logger.LogError("Intento crear un producto con precio unitario negativo: {precio}", request.CurrentUnitPrice);
-                throw new InvalidDataException("El precio unitario ser mayores a cero");
+                _logger.LogError("Intento crear un producto con precio unitario no positivo: {precio}", request.CurrentUnitPrice);
+                throw new InvalidDataException(InvalidUnitPriceMessage);
             }
-            if (request.StockQuantity <= 0)
+            if (request.StockQuantity < 0)
             {
                 _logger.LogError("Intento crear un producto con stock negativo: {stock}", request.StockQuantity);
-                throw new InvalidDataException("La cantidad de stock debe ser mayor o igual a cero");
+                throw new InvalidDataException(InvalidStockQuantityMessage);
             }
             var exist = await _repository.First<Product>(p => p.Sku.Trim() == request.Sku.Trim());
 
@@ -92,31 +95,20 @@ namespace Dsw2025Tpi.Application.Services
         {
             _logger.LogInformation("Consulta de productos. IncludeInactive: {IncludeInactive}, StatusFilter: {Status}", includeInactive, filter.Status);
 
-            
             bool? isActiveFilter = null;
             if (!string.IsNullOrEmpty(filter.Status) && bool.TryParse(filter.Status, out bool parsedStatus))
             {
                 isActiveFilter = parsedStatus;
             }
 
+            var searchTerm = filter.Search?.ToUpperInvariant();
             var filteredProducts = await _repository.GetFiltered<Product>(p =>
-                
                 (includeInactive || p.IsActive)
-
-                &&
-
-                
-                (!isActiveFilter.HasValue || p.IsActive == isActiveFilter.Value)
-
-                &&
-
-                
-                (string.IsNullOrEmpty(filter.Search)
-                    || (p.Name != null && p.Name.Contains(filter.Search))
-                    || (p.InternalCode != null && p.InternalCode.Contains(filter.Search))
-                    || (p.Sku != null && p.Sku.Contains(filter.Search))
-                )
-            );
+                && (!isActiveFilter.HasValue || p.IsActive == isActiveFilter.Value)
+                && (string.IsNullOrEmpty(searchTerm)
+                    || (p.Name != null && p.Name.ToUpper().Contains(searchTerm))
+                    || (p.InternalCode != null && p.InternalCode.ToUpper().Contains(searchTerm))
+                    || (p.Sku != null && p.Sku.ToUpper().Contains(searchTerm))));
 
             if (filteredProducts == null || !filteredProducts.Any())
             {
@@ -152,15 +144,15 @@ namespace Dsw2025Tpi.Application.Services
                 _logger.LogError("Intento actualizar un producto sin poner un nombre o un sku");
                 throw new InvalidDataException("El sku y el nombre son requerido");
             }
-            if (request.CurrentUnitPrice < 0)
+            if (request.CurrentUnitPrice <= 0)
             {
-                _logger.LogError("Intento actualizar un producto poniendo un precio invalido precion ingresado: {UnitPrice}", request.CurrentUnitPrice);
-                throw new InvalidDataException("El precio unitario ser mayores a cero");
+                _logger.LogError("Intento actualizar un producto con precio unitario no positivo: {UnitPrice}", request.CurrentUnitPrice);
+                throw new InvalidDataException(InvalidUnitPriceMessage);
             }
-            if (request.StockQuantity <= 0)
+            if (request.StockQuantity < 0)
             {
-                _logger.LogError("Intento actualizar un producto con un stock invalido valor ingresado: {stock}", request.StockQuantity);
-                throw new InvalidDataException("La cantidad de stock debe ser mayor o igual a cero");
+                _logger.LogError("Intento actualizar un producto con stock negativo: {stock}", request.StockQuantity);
+                throw new InvalidDataException(InvalidStockQuantityMessage);
             }
             var mismoSku = await _repository.First<Product>(
                 p => p.Sku == request.Sku && p.Id != id 

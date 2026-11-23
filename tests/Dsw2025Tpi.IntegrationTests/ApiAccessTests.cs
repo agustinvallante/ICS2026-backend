@@ -1,0 +1,219 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
+using Dsw2025Tpi.Tests.Shared;
+using Microsoft.IdentityModel.Tokens;
+using Xunit;
+
+namespace Dsw2025Tpi.IntegrationTests;
+
+[Trait("Category", "Integration")]
+public class ApiAccessTests
+{
+    [Theory]
+    [InlineData(null, "GET", "/api/products", 200)]
+    [InlineData(null, "GET", "/api/orders", 401)]
+    [InlineData("User", "GET", "/api/orders", 200)]
+    [InlineData("Admin", "GET", "/api/orders", 200)]
+    [InlineData(null, "PUT", "/api/orders/00000000-0000-0000-0000-000000000001/status", 401)]
+    [InlineData("User", "PUT", "/api/orders/00000000-0000-0000-0000-000000000001/status", 403)]
+    [InlineData("Admin", "PUT", "/api/orders/00000000-0000-0000-0000-000000000001/status", 404)]
+    public async Task ProtectedEndpoints_WithDifferentRoles_ReturnExpectedStatus(
+        string? role, string method, string path, int expected)
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(role);
+        using var request = new HttpRequestMessage(new HttpMethod(method), path);
+        if (method == "PUT") request.Content = JsonContent.Create("PROCESSING");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal((HttpStatusCode)expected, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null, 401)]
+    [InlineData("User", 403)]
+    public async Task AddProduct_WhenUnauthenticatedOrNotAdmin_ReturnsUnauthorizedOrForbidden(string? role, int expected)
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(role);
+
+        using var response = await client.PostAsJsonAsync("/api/products", ProductRequestFactory.Create(sku: "SKU-NEW"));
+
+        Assert.Equal((HttpStatusCode)expected, response.StatusCode);
+        factory.Inspect(db => Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count()));
+    }
+
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("signature")]
+    [InlineData("expired")]
+    [InlineData("issuer")]
+    [InlineData("audience")]
+    public async Task GetOrders_WithInvalidToken_ReturnsUnauthorized(string invalidPart)
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(null);
+        var jwt = new JwtSecurityToken(
+            issuer: invalidPart == "issuer" ? "wrong" : ApiFactory.Issuer,
+            audience: invalidPart == "audience" ? "wrong" : ApiFactory.Audience,
+            claims: [new Claim(ClaimTypes.Role, "User"), new Claim("customerId", factory.CustomerId.ToString())],
+            notBefore: DateTime.UtcNow.AddHours(-1),
+            expires: invalidPart == "expired" ? DateTime.UtcNow.AddMinutes(-10) : DateTime.UtcNow.AddMinutes(30),
+            signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(
+                invalidPart == "signature" ? "WRONG_TEST_KEY_0123456789_ABCDEFGHIJK" : ApiFactory.Key)), SecurityAlgorithms.HmacSha256));
+        var token = invalidPart == "malformed" ? "not-a-jwt" : new JwtSecurityTokenHandler().WriteToken(jwt);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        using var response = await client.GetAsync("/api/orders");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RegisterAndLogin_WithValidCredentials_ReturnUsableCustomerTokens()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(null);
+        var registration = new { Username = "new-user", Email = "new@example.test", Password = "Test_Password123!" };
+
+        using var registered = await client.PostAsJsonAsync("/api/auth/register", registration);
+        Assert.Equal(HttpStatusCode.OK, registered.StatusCode);
+        var registrationBody = await registered.Content.ReadFromJsonAsync<JsonElement>();
+        var customerId = registrationBody.GetProperty("customerId").GetGuid();
+        Assert.NotEqual(Guid.Empty, customerId);
+        factory.Inspect(db => Assert.Contains(db.Set<Dsw2025Tpi.Domain.Entities.Customer>(), c => c.Id == customerId));
+
+        using var login = await client.PostAsJsonAsync("/api/auth/login", new { registration.Username, registration.Password });
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        var loginBody = await login.Content.ReadFromJsonAsync<JsonElement>();
+        var token = loginBody.GetProperty("token").GetString();
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
+        Assert.Equal(customerId.ToString(), jwt.Claims.Single(c => c.Type == "customerId").Value);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var orders = await client.GetAsync("/api/orders");
+        Assert.Equal(HttpStatusCode.OK, orders.StatusCode);
+
+        using var wrongPassword = await client.PostAsJsonAsync("/api/auth/login", new { registration.Username, Password = "Wrong123!" });
+        Assert.Equal(HttpStatusCode.Unauthorized, wrongPassword.StatusCode);
+        using var duplicate = await client.PostAsJsonAsync("/api/auth/register", registration);
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+    }
+
+    [Fact]
+    public async Task Login_WithUnknownUser_ReturnsUnauthorized()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient(null);
+
+        using var response = await client.PostAsJsonAsync("/api/auth/login", new { Username = "missing", Password = "Test123!" });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AddProduct_WhenSkuAlreadyExistsInDatabase_ReturnsConflictStatusCode()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient("Admin");
+
+        // SKU-1 ya existe en la base sembrada por ApiFactory.
+        using var response = await client.PostAsJsonAsync("/api/products", ProductRequestFactory.Create(sku: "SKU-1"));
+
+        await AssertJsonError(response, HttpStatusCode.Conflict);
+        factory.Inspect(db => Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count()));
+    }
+
+    [Fact]
+    public async Task AddProduct_WithInvalidData_ReturnsJsonError()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient("Admin");
+
+        using var response = await client.PostAsJsonAsync("/api/products", ProductRequestFactory.Create(currentUnitPrice: -1m));
+
+        await AssertJsonError(response, HttpStatusCode.BadRequest);
+        factory.Inspect(db => Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count()));
+    }
+
+    private static async Task AssertJsonError(HttpResponseMessage response, HttpStatusCode expected)
+    {
+        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(string.IsNullOrWhiteSpace(error.GetProperty("Message").GetString()));
+    }
+
+    [Theory]
+    [InlineData("POST", 0.0, 1, 400)]
+    [InlineData("POST", -1.0, 1, 400)]
+    [InlineData("POST", 12.5, -1, 400)]
+    [InlineData("POST", 12.5, 0, 201)]
+    [InlineData("PUT", 0.0, 1, 400)]
+    [InlineData("PUT", -1.0, 1, 400)]
+    [InlineData("PUT", 12.5, -1, 400)]
+    [InlineData("PUT", 12.5, 0, 200)]
+    public async Task ProductEndpoints_EnforcePriceAndStockBoundaries(
+        string method, decimal price, int stock, int expectedStatus)
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient("Admin");
+        var isUpdate = method == "PUT";
+        var request = ProductRequestFactory.Create(
+            sku: isUpdate ? "SKU-1" : "SKU-NEW",
+            currentUnitPrice: price,
+            stockQuantity: stock);
+
+        using var response = isUpdate
+            ? await client.PutAsJsonAsync($"/api/products/{factory.ProductId}", request)
+            : await client.PostAsJsonAsync("/api/products", request);
+
+        Assert.Equal((HttpStatusCode)expectedStatus, response.StatusCode);
+
+        if (expectedStatus == (int)HttpStatusCode.BadRequest)
+        {
+            var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+            var expectedMessage = price <= 0m
+                ? "El precio unitario debe ser mayor a cero."
+                : "La cantidad de stock no puede ser negativa.";
+            Assert.Equal(expectedMessage, error.GetProperty("Message").GetString());
+
+            factory.Inspect(db =>
+            {
+                Assert.Equal(2, db.Set<Dsw2025Tpi.Domain.Entities.Product>().Count());
+                var unchanged = db.Set<Dsw2025Tpi.Domain.Entities.Product>()
+                    .Single(product => product.Id == factory.ProductId);
+                Assert.Equal(12.50m, unchanged.CurrentUnitPrice);
+                Assert.Equal(5, unchanged.StockQuantity);
+            });
+            return;
+        }
+
+        factory.Inspect(db =>
+        {
+            var persisted = isUpdate
+                ? db.Set<Dsw2025Tpi.Domain.Entities.Product>().Single(product => product.Id == factory.ProductId)
+                : db.Set<Dsw2025Tpi.Domain.Entities.Product>().Single(product => product.Sku == "SKU-NEW");
+            Assert.Equal(price, persisted.CurrentUnitPrice);
+            Assert.Equal(0, persisted.StockQuantity);
+        });
+    }
+
+    [Fact]
+    public async Task CreateOrder_WithMalformedBody_ReturnsBadRequest()
+    {
+        using var factory = new ApiFactory();
+        using var client = factory.CreateSeededClient();
+        using var content = new StringContent("{invalid", Encoding.UTF8, "application/json");
+
+        using var response = await client.PostAsync("/api/orders", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        factory.Inspect(db => Assert.Empty(db.Set<Dsw2025Tpi.Domain.Entities.Order>()));
+    }
+}
